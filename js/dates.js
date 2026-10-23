@@ -60,6 +60,11 @@ export function startOfWeek(iso) {
   return addDays(iso, -offset);
 }
 
+// 曜日。Date#getDay と同じく 0 = 日曜 … 6 = 土曜。
+export function weekdayOf(iso) {
+  return fromISO(requireISO(iso)).getDay();
+}
+
 // その日が属する週の月曜〜日曜の 7 日分。
 export function weekDates(iso) {
   const monday = startOfWeek(iso);

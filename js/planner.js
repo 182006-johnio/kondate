@@ -9,12 +9,22 @@
 //   2. 同じ日の昼・夕の各パーツと protein が重ならない
 //   3. 夕の protein パーツは、前日と翌日の夕の protein パーツと protein が重ならない
 // 候補が無ければ 3 → 2 → 1 の順に条件を外す。0 も満たせないときだけ未提案（null）にする。
+//
+// 木曜は魚の日。木曜夕の protein パーツは魚（protein: fish）から選ぶ。
+// 魚のレシピが 1 件も無いときだけ、この決まりを外す。
 
-import { addDays, weekDates } from './dates.js';
+import { addDays, weekDates, weekdayOf } from './dates.js';
 import { MEALS, PARTS, fitsSlot, slotKey } from './schema.js';
 
 // 朝食は毎日同じものを出す前提なので、重複・protein の比較に入れない。
 const COMPARED_MEALS = ['lunch', 'dinner'];
+
+const FISH_DAY = 4; // 木曜
+
+// その枠で決まっている protein。無ければ null。
+function requiredProtein(date, meal, part) {
+  return meal === 'dinner' && part === 'protein' && weekdayOf(date) === FISH_DAY ? 'fish' : null;
+}
 
 // 週の献立をまとめて作る。返すのはその週の枠の配列で、そのまま storage.putSlots に渡せる。
 //
@@ -92,7 +102,11 @@ export function rerollSlot({ date, meal, part, recipes, slots, random }) {
 // --- 内部 -------------------------------------------------------------
 
 function pickRecipe({ recipes, byId, days, random, date, meal, part, decided, exclude }) {
-  const fitting = recipes.filter((recipe) => fitsSlot(recipe, meal, part));
+  let fitting = recipes.filter((recipe) => fitsSlot(recipe, meal, part));
+  const required = requiredProtein(date, meal, part);
+  if (required && fitting.some((recipe) => recipe.protein === required)) {
+    fitting = fitting.filter((recipe) => recipe.protein === required);
+  }
   let pool = fitting.filter((recipe) => !exclude.includes(recipe.id));
   // 避けたいレシピしか無いなら、それでも空にするよりはよい。
   if (pool.length === 0) pool = fitting;
@@ -100,11 +114,16 @@ function pickRecipe({ recipes, byId, days, random, date, meal, part, decided, ex
 
   const used = usedInWeek(decided, days);
   const sameDay = proteinsOf(byId, slotsOfDay(decided, date));
+  // 木曜の昼は夕の protein より先に選ぶ。夕が魚に決まっているので、昼から魚を外しておく。
+  const dinnerProtein = requiredProtein(date, 'dinner', 'protein');
+  if (dinnerProtein && part !== 'protein' && !decided.has(slotKey(date, 'dinner', 'protein'))) {
+    sameDay.add(dinnerProtein);
+  }
   const neighbors = part === 'protein'
-    ? proteinsOf(byId, [
-      decided.get(slotKey(addDays(date, -1), 'dinner', 'protein')),
-      decided.get(slotKey(addDays(date, 1), 'dinner', 'protein')),
-    ])
+    ? new Set([
+      neighborProtein(byId, decided, addDays(date, -1)),
+      neighborProtein(byId, decided, addDays(date, 1)),
+    ].filter(Boolean))
     : new Set();
 
   // 前の条件ほど優先度が高い。満たせないときは後ろから外していく。
@@ -141,6 +160,15 @@ function slotsOfDay(decided, date) {
     }
   }
   return slots;
+}
+
+// 隣の日の夕の protein パーツの protein。
+// まだ決まっていなくても、木曜のように決まりがあればそれを使う。水曜を選ぶ時点で
+// 木曜は未定なので、こうしないと水曜に魚を出して木曜と重なる。
+function neighborProtein(byId, decided, date) {
+  const slot = decided.get(slotKey(date, 'dinner', 'protein'));
+  const protein = slot ? byId.get(slot.recipe_id)?.protein : requiredProtein(date, 'dinner', 'protein');
+  return protein && protein !== 'none' ? protein : null;
 }
 
 // 枠のレシピの protein を集める。none と、レシピ集から消えたレシピは比較に使わない。
