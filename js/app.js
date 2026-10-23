@@ -6,6 +6,7 @@
 import { RECIPES } from '../data/recipes.js';
 import * as storage from './storage.js';
 import { clear, el } from './ui/dom.js';
+import { openSlotSheet } from './ui/slot-sheet.js';
 import { renderWeek } from './ui/week.js';
 
 const view = document.getElementById('view');
@@ -32,6 +33,9 @@ const ctx = {
     toastTimer = setTimeout(() => { toastNode.hidden = true; }, 2500);
   },
   sheet: document.getElementById('sheet'),
+  openSlot(info) {
+    openSlotSheet(ctx, info);
+  },
 };
 
 // [正規表現, 描画関数, タブ名]。上から順に最初に合ったものを使う。

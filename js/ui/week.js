@@ -93,7 +93,7 @@ function slotRow({ date, meal, part, slot, recipe, ctx, nearby }) {
   return el('button', {
     class: slot ? 'slot' : 'slot empty',
     dataset: { date, meal, part },
-    on: { click: () => ctx.openSlot?.({ date, meal, part, slot, recipe, nearby }) },
+    on: { click: () => ctx.openSlot({ date, meal, part, slot, recipe, nearby }) },
   },
   el('span', { class: meal === 'dinner' ? 'slot-label sub' : 'slot-label', text: label }),
   el('span', { class: 'slot-name', text: name }),
