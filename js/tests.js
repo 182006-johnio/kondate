@@ -3,6 +3,7 @@
 // 本番データを壊さないよう、保存先は専用のキーに切り替えて実行し、最後に消す。
 
 import * as dates from './dates.js';
+import * as planner from './planner.js';
 import * as schema from './schema.js';
 import * as storage from './storage.js';
 
@@ -281,6 +282,217 @@ test('deleteRecipe はそのレシピの枠と朝食設定も消す', async () =
   const slots = await storage.getSlots('2026-10-19', '2026-10-19');
   assertEqual(slots.map((slot) => slot.recipe_id), ['arrange-001'], '同梱レシピの枠は残る');
   assertEqual((await storage.getSettings()).breakfast_recipe_id, null, '朝食設定');
+});
+
+// --- planner ----------------------------------------------------------
+
+const WEEK = '2026-10-19'; // 月曜
+const PREV_SUNDAY = '2026-10-18';
+
+// 再現できる乱数列（mulberry32）。同じ seed なら毎回同じ献立になる。
+function seeded(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// 昼・夕どちらにも使えるレシピを、protein ごとに count 件ずつ作る。
+function variedRecipes(count = 4) {
+  const proteins = ['chicken', 'pork', 'beef', 'fish', 'egg', 'soy'];
+  return proteins.flatMap((protein) => Array.from({ length: count }, (_, index) => makeRecipe({
+    id: `${protein}-${index}`,
+    name: `${protein} ${index}`,
+    protein,
+  })));
+}
+
+const BREAKFAST_RECIPE = makeRecipe({ id: 'mine-breakfast', meals: ['breakfast'], protein: 'egg', source: 'mine' });
+
+function byKey(slots) {
+  return new Map(slots.map((slot) => [schema.slotKey(slot.date, slot.meal), slot]));
+}
+
+// 提案ルール 2〜4 を満たしているかを確かめる。違反を文字列の配列で返す。
+function ruleViolations(slots, recipes) {
+  const protein = new Map(recipes.map((recipe) => [recipe.id, recipe.protein]));
+  const map = byKey(slots);
+  const violations = [];
+  const days = dates.weekDates(WEEK);
+
+  const ids = days.flatMap((date) => ['lunch', 'dinner']
+    .map((meal) => map.get(schema.slotKey(date, meal))?.recipe_id)
+    .filter(Boolean));
+  if (new Set(ids).size !== ids.length) violations.push('同じ週に同じレシピ');
+
+  for (const date of days) {
+    const lunch = protein.get(map.get(schema.slotKey(date, 'lunch'))?.recipe_id);
+    const dinner = protein.get(map.get(schema.slotKey(date, 'dinner'))?.recipe_id);
+    if (lunch && lunch !== 'none' && lunch === dinner) violations.push(`${date} 昼と夕が ${lunch}`);
+
+    const before = protein.get(map.get(schema.slotKey(dates.addDays(date, -1), 'dinner'))?.recipe_id);
+    if (dinner && dinner !== 'none' && dinner === before) violations.push(`${date} 前日の夕食と ${dinner}`);
+  }
+  return violations;
+}
+
+test('planWeek は朝食を固定し、昼・夕を 7 日分埋める', () => {
+  const recipes = [BREAKFAST_RECIPE, ...variedRecipes()];
+  const slots = planner.planWeek({
+    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: BREAKFAST_RECIPE.id, random: seeded(1),
+  });
+  assertEqual(slots.length, 21, '枠の数');
+  assert(slots.filter((slot) => slot.meal === 'breakfast').every((slot) => slot.recipe_id === BREAKFAST_RECIPE.id), '朝食');
+  assert(slots.every((slot) => slot.locked === false), '新しい枠は固定しない');
+  assert(slots.every((slot) => schema.validateSlot(slot).ok), '枠として正しい');
+});
+
+test('planWeek は候補が十分あればルールを破らない（seed を変えて 50 回）', () => {
+  const recipes = [BREAKFAST_RECIPE, ...variedRecipes()];
+  for (let seed = 1; seed <= 50; seed += 1) {
+    const previous = { date: PREV_SUNDAY, meal: 'dinner', recipe_id: 'fish-0', locked: false };
+    const slots = planner.planWeek({
+      weekStart: WEEK, recipes, slots: [previous], breakfastRecipeId: null, random: seeded(seed),
+    });
+    const violations = ruleViolations([previous, ...slots], recipes);
+    assertEqual(violations, [], `seed ${seed}`);
+  }
+});
+
+test('planWeek は前週の日曜の夕食を返さず、月曜の夕食と比べるだけにする', () => {
+  // 夕食に使えるのは fish と chicken だけ。前週日曜が fish なら月曜は chicken になる。
+  const recipes = [
+    makeRecipe({ id: 'lunch-none', meals: ['lunch'], protein: 'none' }),
+    makeRecipe({ id: 'fish-a', meals: ['dinner'], protein: 'fish' }),
+    makeRecipe({ id: 'chicken-a', meals: ['dinner'], protein: 'chicken' }),
+  ];
+  const previous = { date: PREV_SUNDAY, meal: 'dinner', recipe_id: 'fish-a', locked: false };
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const slots = planner.planWeek({
+      weekStart: WEEK, recipes, slots: [previous], breakfastRecipeId: null, random: seeded(seed),
+    });
+    assert(slots.every((slot) => slot.date >= WEEK), '週の外の枠を返した');
+    assertEqual(byKey(slots).get(`${WEEK} dinner`).recipe_id, 'chicken-a', `seed ${seed} 月曜の夕食`);
+  }
+});
+
+test('planWeek は固定枠を残し、そのレシピを他の枠で使わない', () => {
+  const recipes = [BREAKFAST_RECIPE, ...variedRecipes()];
+  const locked = [
+    { date: '2026-10-21', meal: 'dinner', recipe_id: 'beef-0', locked: true },
+    { date: '2026-10-19', meal: 'breakfast', recipe_id: 'chicken-3', locked: true },
+  ];
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const slots = planner.planWeek({
+      weekStart: WEEK, recipes, slots: locked, breakfastRecipeId: BREAKFAST_RECIPE.id, random: seeded(seed),
+    });
+    const map = byKey(slots);
+    assertEqual(map.get('2026-10-21 dinner'), locked[0], '固定した夕食');
+    assertEqual(map.get('2026-10-19 breakfast'), locked[1], '固定した朝食');
+    const beefUses = slots.filter((slot) => slot.recipe_id === 'beef-0').length;
+    assertEqual(beefUses, 1, `seed ${seed} 固定したレシピの使用回数`);
+    assertEqual(ruleViolations(slots, recipes), [], `seed ${seed} 固定枠の前後`);
+  }
+});
+
+test('planWeek は固定していない既存の枠を作り直す（使用済みに数えない）', () => {
+  // 昼専用・夕専用が 7 件ずつ。既存の枠を使用済みに数えてしまうと候補が足りず重複が出る。
+  const lunches = Array.from({ length: 7 }, (_, i) => makeRecipe({ id: `l${i}`, meals: ['lunch'], protein: 'none' }));
+  const dinners = Array.from({ length: 7 }, (_, i) => makeRecipe({ id: `d${i}`, meals: ['dinner'], protein: 'none' }));
+  const existing = dates.weekDates(WEEK).flatMap((date, i) => [
+    { date, meal: 'lunch', recipe_id: `l${i}`, locked: false },
+    { date, meal: 'dinner', recipe_id: `d${i}`, locked: false },
+  ]);
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const slots = planner.planWeek({
+      weekStart: WEEK, recipes: [...lunches, ...dinners], slots: existing, breakfastRecipeId: null, random: seeded(seed),
+    });
+    assertEqual(new Set(slots.map((slot) => slot.recipe_id)).size, 14, `seed ${seed} 14 件すべて別のレシピ`);
+  }
+});
+
+test('planWeek は朝食が未設定なら朝食枠を作らない', () => {
+  const slots = planner.planWeek({
+    weekStart: WEEK, recipes: variedRecipes(), slots: [], breakfastRecipeId: null, random: seeded(1),
+  });
+  assert(slots.every((slot) => slot.meal !== 'breakfast'), '朝食枠がある');
+  assertEqual(slots.length, 14, '枠の数');
+});
+
+test('planWeek は候補が少なくても条件を緩めて全枠を埋める', () => {
+  // 昼・夕兼用が鶏肉 2 件だけ。重複も protein の重なりも避けられない。
+  const recipes = [makeRecipe({ id: 'c1' }), makeRecipe({ id: 'c2' })];
+  const slots = planner.planWeek({
+    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(3),
+  });
+  assertEqual(slots.length, 14, '枠の数');
+});
+
+test('planWeek は緩めるとき「同じ週で重複しない」を最後まで守る', () => {
+  // 鶏肉だけ 14 件。protein の条件は破るしかないが、重複は避けられる。
+  const recipes = Array.from({ length: 14 }, (_, i) => makeRecipe({ id: `c${i}` }));
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const slots = planner.planWeek({
+      weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(seed),
+    });
+    assertEqual(new Set(slots.map((slot) => slot.recipe_id)).size, 14, `seed ${seed} 重複`);
+  }
+});
+
+test('planWeek は使えるレシピが 0 件の食事を未提案のままにする', () => {
+  const recipes = [makeRecipe({ id: 'lunch-only', meals: ['lunch'] })];
+  const slots = planner.planWeek({
+    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(1),
+  });
+  assert(slots.every((slot) => slot.meal === 'lunch'), '夕食枠がある');
+  assertEqual(slots.length, 7, '枠の数');
+});
+
+test('planWeek は同じ乱数列なら同じ献立を返す', () => {
+  const recipes = variedRecipes();
+  const run = () => planner.planWeek({
+    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(42),
+  });
+  assertEqual(run(), run(), '結果');
+});
+
+test('planWeek は random が 1 に極めて近い値を返しても範囲外にならない', () => {
+  const slots = planner.planWeek({
+    weekStart: WEEK, recipes: variedRecipes(1), slots: [], breakfastRecipeId: null, random: () => 0.9999999999999999,
+  });
+  assert(slots.every((slot) => typeof slot.recipe_id === 'string'), 'recipe_id');
+});
+
+test('rerollSlot は今のレシピを避け、ルールを守る', () => {
+  const recipes = variedRecipes();
+  const base = planner.planWeek({
+    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(7),
+  });
+  const target = base.find((slot) => slot.date === '2026-10-22' && slot.meal === 'dinner');
+  for (let seed = 1; seed <= 30; seed += 1) {
+    const slot = planner.rerollSlot({
+      date: target.date, meal: target.meal, recipes, slots: base, random: seeded(seed),
+    });
+    assert(slot.recipe_id !== target.recipe_id, `seed ${seed} 今のレシピのまま`);
+    const next = base.map((candidate) => (candidate === target ? slot : candidate));
+    assertEqual(ruleViolations(next, recipes), [], `seed ${seed}`);
+  }
+});
+
+test('rerollSlot は他に候補が無ければ今のレシピを返し、0 件なら null', () => {
+  const only = makeRecipe({ id: 'only', meals: ['lunch'] });
+  const current = { date: WEEK, meal: 'lunch', recipe_id: 'only', locked: false };
+  const slot = planner.rerollSlot({ date: WEEK, meal: 'lunch', recipes: [only], slots: [current], random: seeded(1) });
+  assertEqual(slot, { ...current }, '今のレシピ');
+  assertEqual(
+    planner.rerollSlot({ date: WEEK, meal: 'dinner', recipes: [only], slots: [], random: seeded(1) }),
+    null,
+    '候補なし',
+  );
 });
 
 // --- 実行 -------------------------------------------------------------
