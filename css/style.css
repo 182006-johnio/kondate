@@ -594,6 +594,120 @@ a {
   flex: 1;
 }
 
+/* --- フォーム ----------------------------------------------------------- */
+
+.form {
+  display: grid;
+  gap: 16px;
+}
+
+.form-field {
+  display: grid;
+  gap: 6px;
+}
+
+.form-label,
+.checks legend {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+select.field {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 32px;
+}
+
+textarea.field {
+  resize: vertical;
+}
+
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.checks legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+}
+
+.check input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+}
+
+.rows {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.row .amount-field {
+  flex: 0 0 32%;
+}
+
+.step-rows {
+  counter-reset: step;
+}
+
+.step-rows .row::before {
+  counter-increment: step;
+  content: counter(step);
+  min-width: 1.2em;
+  padding-top: 10px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.icon-button.remove {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.3rem;
+  cursor: pointer;
+}
+
+.form-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
 /* --- トースト ----------------------------------------------------------- */
 
 .toast {
