@@ -2,11 +2,13 @@
 //
 // 本番データを壊さないよう、保存先は専用のキーに切り替えて実行し、最後に消す。
 
+import { FOODS } from '../data/foods.js';
 import { PANTRY } from '../data/pantry.js';
 import { RECIPES } from '../data/recipes.js';
 import * as dates from './dates.js';
 // export は予約語なので、モジュールの束縛名は backup にする。
 import * as backup from './export.js';
+import * as nutrition from './nutrition.js';
 import * as planner from './planner.js';
 import * as schema from './schema.js';
 import * as storage from './storage.js';
@@ -785,6 +787,150 @@ test('同梱レシピで週を作るとルールを破らない（seed を変え
     assertEqual(slots.length, 7 * 4, `seed ${seed} 枠の数`);
     assertEqual(ruleViolations(slots, RECIPES), [], `seed ${seed}`);
   }
+});
+
+// --- nutrition（栄養計算） ----------------------------------------------
+
+function close(actual, expected, message, tolerance = 0.01) {
+  if (Math.abs(actual - expected) > tolerance) {
+    throw new Error(`${message}\n  期待: ${expected}\n  実際: ${actual}`);
+  }
+}
+
+// 計算を追いやすい架空の食品。
+const TEST_FOODS = {
+  ...FOODS,
+  test_meat: { no: '', name: 'テスト肉', kcal: 200, protein: 20, fat: 10, carb: 0, fiber: 0, salt: 0.1 },
+  test_salt: { no: '', name: 'テスト塩', kcal: 0, protein: 0, fat: 0, carb: 0, fiber: 0, salt: 100 },
+  test_null: { no: '', name: '未測定あり', kcal: 100, protein: null, fat: 1, carb: 1, fiber: null, salt: 0 },
+};
+
+function detail(overrides = {}) {
+  return {
+    servings: 2,
+    ingredients: [
+      { name: '肉', grams: 300, food: 'test_meat' },
+      { name: '塩', grams: 4, food: 'test_salt' },
+    ],
+    published: null,
+    ...overrides,
+  };
+}
+
+test('foods.js は成分表の値を持ち、キャベツとご飯の値が成分表どおり', () => {
+  assertEqual([FOODS.cabbage.no, FOODS.cabbage.kcal, FOODS.cabbage.protein], ['06061', 23, 1.2], 'キャベツ');
+  assertEqual([FOODS.rice_cooked.no, FOODS.rice_cooked.kcal, FOODS.rice_cooked.carb], ['01088', 156, 37.1], 'ご飯');
+  for (const [key, food] of Object.entries(FOODS)) {
+    for (const field of nutrition.NUTRIENTS) {
+      assert(food[field] === null || typeof food[field] === 'number', `${key}.${field}`);
+    }
+  }
+});
+
+test('sumIngredients は g × 100g あたりの値を足し、成分表に無い食材を unknown に入れる', () => {
+  const { totals, unknown } = nutrition.sumIngredients([
+    { name: '肉', grams: 150, food: 'test_meat' },
+    { name: '未測定あり', grams: 100, food: 'test_null' },
+    { name: '謎の食材', grams: 50, food: null },
+    { name: '無いキー', grams: 50, food: 'no_such_food' },
+  ], TEST_FOODS);
+  assertEqual([totals.kcal, totals.protein, totals.fat], [400, 30, 16], '合計（未測定は 0）');
+  assertEqual(unknown, ['謎の食材', '無いキー'], 'unknown');
+});
+
+test('recipeNutrition は分量データを servings で割り、published があればその項目を優先する', () => {
+  const recipe = makeRecipe({ id: 'r1', source: 'dlab' });
+  const calc = nutrition.recipeNutrition(recipe, { r1: detail() }, TEST_FOODS);
+  assertEqual([calc.values.kcal, calc.values.protein, calc.values.salt], [300, 30, 2.15], '計算値（1 人分）');
+
+  const published = { kcal: 280, protein: null, fat: null, carb: null, fiber: null, salt: null };
+  const mixed = nutrition.recipeNutrition(recipe, { r1: detail({ published }) }, TEST_FOODS);
+  assertEqual([mixed.values.kcal, mixed.values.protein], [280, 30], 'kcal は published、たんぱく質は計算');
+  assertEqual(nutrition.recipeNutrition(recipe, {}, TEST_FOODS), null, '分量データが無ければ null');
+});
+
+test('recipeNutrition は自分のレシピなら入力した値を使う', () => {
+  const recipe = makeRecipe({
+    id: 'mine-1', source: 'mine', kind: 'dish', meals: ['breakfast'],
+    nutrition: { kcal: 350, protein: 20, fat: null, carb: 40, fiber: 5, salt: 1 },
+  });
+  const result = nutrition.recipeNutrition(recipe, {}, TEST_FOODS);
+  assertEqual([result.values.kcal, result.values.fat, result.source], [350, 0, 'mine'], '入力値');
+  assertEqual(nutrition.recipeNutrition({ ...recipe, nutrition: null }, {}, TEST_FOODS), null, '未入力は null');
+});
+
+test('dayNutrition は夕食にキャベツ半玉 500g とご飯 270g を足す', () => {
+  const day = nutrition.dayNutrition({ slots: [], byId: new Map(), details: {}, foods: FOODS });
+  // キャベツ 23kcal × 5 + ご飯 156kcal × 2.7
+  close(day.totals.kcal, 23 * 5 + 156 * 2.7, 'kcal');
+  close(day.totals.carb, 5.2 * 5 + 37.1 * 2.7, '炭水化物');
+  assertEqual(day.unknownCount, 0, '不明な品');
+  assertEqual(day.items.map((item) => item.name), ['キャベツ半玉（500g）', 'ご飯（270g）'], '内訳');
+});
+
+test('dayNutrition は carb が麺のレシピなら 270g をその麺で数える', () => {
+  const noodle = makeRecipe({ id: 'n1', kind: 'noodle', source: 'external' });
+  const slots = [slot('2026-10-19', 'dinner', 'carb', 'n1')];
+  const day = nutrition.dayNutrition({
+    slots, byId: new Map([['n1', noodle]]), details: { n1: detail({ base_carb: 'udon' }) }, foods: TEST_FOODS,
+  });
+  assert(day.items.some((item) => item.name === 'ゆでうどん（270g）'), 'うどんで数える');
+  close(day.totals.kcal, 300 + 23 * 5 + 95 * 2.7, 'kcal');
+});
+
+test('dayNutrition は栄養が分からない枠を合計に入れず数える', () => {
+  const known = makeRecipe({ id: 'k1', source: 'dlab' });
+  const unknown = makeRecipe({ id: 'u1', source: 'dlab' });
+  const slots = [
+    slot('2026-10-19', 'lunch', 'dish', 'k1'),
+    slot('2026-10-19', 'dinner', 'protein', 'u1'),
+    slot('2026-10-19', 'dinner', 'dressing', 'gone'),
+  ];
+  const day = nutrition.dayNutrition({
+    slots, byId: new Map([['k1', known], ['u1', unknown]]), details: { k1: detail() }, foods: TEST_FOODS,
+  });
+  assertEqual(day.unknownCount, 2, '不明な品（分量データ無し・見つからないレシピ）');
+  close(day.totals.kcal, 300 + 23 * 5 + 156 * 2.7, 'kcal');
+  assertEqual(day.items.find((item) => item.part === 'dressing').name, '見つからないレシピ', '消えたレシピ');
+});
+
+test('goalRatios は目標に対する割合を返し、未設定は null', () => {
+  const ratios = nutrition.goalRatios({ kcal: 1500, protein: 90, fat: 50, carb: 200, fiber: 21, salt: 6 },
+    { kcal: 2000, protein: 120, fat: null, carb: 250, fiber: 21, salt: 7.5 });
+  assertEqual([ratios.kcal, ratios.protein, ratios.fat, ratios.fiber], [0.75, 0.75, null, 1], '割合');
+  assertEqual(nutrition.goalRatios({ kcal: 1 }, null).kcal, null, '目標なし');
+});
+
+test('validateDetails は正しい分量データを通し、壊れたものを拾う', () => {
+  assertEqual(schema.validateDetails({ r1: detail() }).errors, [], '正しい');
+  const cases = [
+    { r1: detail({ servings: 0 }) },
+    { r1: detail({ base_carb: 'ramen' }) },
+    { r1: detail({ ingredients: [{ name: '肉', grams: -1, food: 'x' }] }) },
+    { r1: detail({ ingredients: [{ name: '', grams: 1, food: 'x' }] }) },
+    { r1: detail({ published: { kcal: -5 } }) },
+    { r1: 'x' },
+  ];
+  cases.forEach((value, index) => assert(!schema.validateDetails(value).ok, `${index} 番目が通ってしまった`));
+});
+
+test('replaceDetails は全置換し、不正なファイルでは何も変えない', async () => {
+  await freshStore();
+  assertEqual(await storage.replaceDetails({ version: 1, details: { r1: detail() } }), 1, '件数');
+  await assertThrows(() => storage.replaceDetails({ version: 2, details: {} }), '版が違う');
+  await assertThrows(() => storage.replaceDetails({ version: 1, details: { r2: detail({ servings: -1 }) } }), '壊れた中身');
+  assertEqual(Object.keys(await storage.getDetails()), ['r1'], '最初に読み込んだまま');
+  await storage.replaceDetails({ version: 1, details: { r3: detail() } });
+  assertEqual(Object.keys(await storage.getDetails()), ['r3'], 'マージせず置き換える');
+});
+
+test('自分のレシピに 1 人分の栄養を保存でき、空欄だけなら null になる', async () => {
+  await freshStore();
+  const added = await storage.addRecipe({ ...BREAKFAST, nutrition: { kcal: 400, protein: '', fat: 10 } });
+  assertEqual(added.nutrition, { kcal: 400, protein: null, fat: 10, carb: null, fiber: null, salt: null }, '保存');
+  const cleared = await storage.updateRecipe(added.id, { nutrition: { kcal: '' } });
+  assertEqual(cleared.nutrition, null, '全部空なら null');
+  await assertThrows(() => storage.updateRecipe(added.id, { nutrition: { kcal: -1 } }), '負の数');
 });
 
 // --- export（エクスポート） --------------------------------------------

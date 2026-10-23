@@ -5,6 +5,7 @@ import { KINDS, METHODS, PROTEINS } from '../schema.js';
 import * as storage from '../storage.js';
 import { clear, el } from './dom.js';
 import { KIND_LABEL, MEAL_LABEL, METHOD_LABEL, PROTEIN_LABEL } from './labels.js';
+import { nutritionInputs } from './nutrition-view.js';
 
 const DISH_MEALS = ['breakfast', 'lunch'];
 
@@ -25,7 +26,7 @@ export async function renderRecipeForm(container, ctx, { id = null, query = '' }
     const meal = DISH_MEALS.includes(params.get('meal')) ? params.get('meal') : 'lunch';
     recipe = {
       name: '', kind, meals: [meal], url: '', protein: 'none', method: 'none',
-      ingredients: [], seasonings: [], steps: [], minutes: null, note: '',
+      ingredients: [], seasonings: [], steps: [], minutes: null, note: '', nutrition: null,
     };
   }
 
@@ -48,6 +49,7 @@ export async function renderRecipeForm(container, ctx, { id = null, query = '' }
   const seasonings = itemRows(recipe.seasonings, { placeholder: '調味料', addLabel: '＋ 調味料を追加', list: 'pantry' });
   const steps = stepRows(recipe.steps);
   const note = el('textarea', { class: 'field', rows: 3, value: recipe.note });
+  const nutrition = nutritionInputs(recipe.nutrition);
   const errorBox = el('p', { class: 'form-error pre', hidden: true });
 
   // 一品のときだけ「使える食事」を出す。夕食のパーツは夕食専用なので選ばせない。
@@ -70,6 +72,7 @@ export async function renderRecipeForm(container, ctx, { id = null, query = '' }
       seasonings: seasonings.values(),
       steps: steps.values(),
       note: note.value,
+      nutrition: nutrition.values(),
     };
     // よくある入力漏れは、保存側の検証メッセージ（id や項目名が出る）より先に日本語で知らせる。
     const missing = [];
@@ -109,6 +112,7 @@ export async function renderRecipeForm(container, ctx, { id = null, query = '' }
       group('調味料', seasonings.node),
       group('作り方', steps.node),
       field('メモ', note),
+      group('栄養（1人分・分かる項目だけ）', nutrition.node),
       errorBox,
       el('button', { class: 'button primary wide', type: 'submit', text: id ? '保存する' : '追加する' })),
     el('datalist', { id: 'pantry' }, pantry.map((item) => el('option', { value: item }))),

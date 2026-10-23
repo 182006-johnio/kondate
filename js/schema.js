@@ -63,7 +63,10 @@ export function createSettings() {
 export function migrateDB(v1) {
   return {
     schemaVersion: SCHEMA_VERSION,
-    recipes: v1.recipes,
+    // v2 でレシピに nutrition（1 人分の栄養）が増えた。v1 のレシピは未入力にする。
+    recipes: Array.isArray(v1.recipes)
+      ? v1.recipes.map((recipe) => (isPlainObject(recipe) ? { ...recipe, nutrition: recipe.nutrition ?? null } : recipe))
+      : v1.recipes,
     slots: v1.slots,
     settings: { ...createSettings(), ...v1.settings },
     inventory: [],
@@ -126,7 +129,20 @@ export function normalizeRecipe(fields) {
     steps: normalizeSteps(fields.steps),
     minutes: fields.minutes === undefined || fields.minutes === '' ? null : fields.minutes,
     note: optionalText(fields.note),
+    nutrition: normalizeNutrition(fields.nutrition),
   };
+}
+
+// 1 人分の栄養。全項目が未入力なら null にする（「栄養不明」と区別するため）。
+export function normalizeNutrition(value) {
+  if (value === undefined || value === null) return null;
+  if (!isPlainObject(value)) return value;
+  const result = {};
+  for (const key of GOAL_FIELDS) {
+    const raw = value[key];
+    result[key] = raw === undefined || raw === '' ? null : raw;
+  }
+  return GOAL_FIELDS.every((key) => result[key] === null) ? null : result;
 }
 
 function normalizeMeals(values) {
@@ -204,7 +220,63 @@ export function validateRecipe(recipe) {
     errors.push(`${label}: minutes は 0 以上の整数か null にしてください`);
   }
   if (typeof recipe.note !== 'string') errors.push(`${label}: note が文字列ではありません`);
+  errors.push(...validateNutrition(recipe.nutrition, `${label}: nutrition`));
 
+  return result(errors);
+}
+
+// 栄養値（kcal / protein / fat / carb / fiber / salt）。null か、各項目が 0 以上の数か null。
+// 目標（settings.goals）と同じ形。
+export function validateNutrition(value, label) {
+  if (value === null) return [];
+  if (!isPlainObject(value)) return [`${label} はオブジェクトか null にしてください`];
+  const errors = [];
+  const unknown = Object.keys(value).filter((key) => !GOAL_FIELDS.includes(key));
+  if (unknown.length > 0) errors.push(`${label} に不明な項目があります: ${unknown.join(', ')}`);
+  for (const key of GOAL_FIELDS) {
+    const item = value[key];
+    if (item !== null && !(typeof item === 'number' && Number.isFinite(item) && item >= 0)) {
+      errors.push(`${label} の ${key} は 0 以上の数か null にしてください`);
+    }
+  }
+  return errors;
+}
+
+export const BASE_CARBS = ['udon', 'pasta', 'soba'];
+
+// 分量データ（details）。キーはレシピの id。CLAUDE.md「分量データ」を参照。
+//   servings: 何人分の分量か（正の数）
+//   base_carb: 麺のレシピで、夕食の炭水化物 270g をどの麺で数えるか（省略時はご飯）
+//   ingredients: [{ name, grams, food }]。food は data/foods.js のキー。分からなければ null
+//   published: 元ページに載っている 1 人分の栄養（項目ごとに null 可）。無ければ null
+export function validateDetails(details) {
+  if (!isPlainObject(details)) return result(['分量データがオブジェクトではありません']);
+  const errors = [];
+  for (const [id, detail] of Object.entries(details)) {
+    const label = `分量データ ${id}`;
+    if (!isPlainObject(detail)) {
+      errors.push(`${label}: オブジェクトではありません`);
+      continue;
+    }
+    if (!(typeof detail.servings === 'number' && Number.isFinite(detail.servings) && detail.servings > 0)) {
+      errors.push(`${label}: servings は正の数にしてください`);
+    }
+    if (detail.base_carb !== undefined && !BASE_CARBS.includes(detail.base_carb)) {
+      errors.push(`${label}: base_carb が不正です: ${String(detail.base_carb)}`);
+    }
+    if (!Array.isArray(detail.ingredients)) {
+      errors.push(`${label}: ingredients が配列ではありません`);
+    } else {
+      for (const item of detail.ingredients) {
+        const ok = isPlainObject(item)
+          && isNonEmptyString(item.name)
+          && typeof item.grams === 'number' && Number.isFinite(item.grams) && item.grams >= 0
+          && (item.food === null || isNonEmptyString(item.food));
+        if (!ok) errors.push(`${label}: ingredients の要素は { name, grams（0 以上）, food（文字列か null） } にしてください`);
+      }
+    }
+    errors.push(...validateNutrition(detail.published ?? null, `${label}: published`));
+  }
   return result(errors);
 }
 
@@ -237,14 +309,7 @@ export function validateSettings(settings) {
     if (!isPlainObject(goals)) {
       errors.push('settings.goals はオブジェクトか null にしてください');
     } else {
-      const unknown = Object.keys(goals).filter((key) => !GOAL_FIELDS.includes(key));
-      if (unknown.length > 0) errors.push(`目標に不明な項目があります: ${unknown.join(', ')}`);
-      for (const key of GOAL_FIELDS) {
-        const value = goals[key];
-        if (value !== null && !(typeof value === 'number' && Number.isFinite(value) && value >= 0)) {
-          errors.push(`目標の ${key} は 0 以上の数か null にしてください`);
-        }
-      }
+      errors.push(...validateNutrition(goals, '目標'));
     }
   }
   return result(errors);
@@ -288,8 +353,7 @@ export function validateDB(db) {
       errors.push(...validateNames(names, `買い物リスト ${week} の項目`, NAME_MAX));
     }
   }
-  // 分量データの中身は段階 3 で検証する。ここでは入れ物の形だけを見る。
-  if (!isPlainObject(db.details)) errors.push('details がオブジェクトではありません');
+  errors.push(...validateDetails(db.details).errors);
   if (errors.length > 0) return result(errors);
 
   const recipeIds = new Set();

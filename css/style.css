@@ -773,6 +773,75 @@ textarea.field {
   font-size: 0.9rem;
 }
 
+/* --- 栄養 --------------------------------------------------------------- */
+
+.day-nutrition {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  margin-top: 4px;
+  padding: 8px 4px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.day-nutrition:active {
+  background: var(--pressed);
+}
+
+.goal-bars {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.goal-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.bar {
+  display: block;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.bar-fill.over {
+  background: var(--danger);
+}
+
+.sheet-sub {
+  margin: 12px 0 6px;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.nutrient-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
 /* --- トースト ----------------------------------------------------------- */
 
 .toast {

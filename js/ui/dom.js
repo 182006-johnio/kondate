@@ -20,7 +20,8 @@ export function el(tag, props = {}, ...children) {
   return node;
 }
 
-function append(node, children) {
+// 子を足す。null / undefined / false は飛ばす（Node#append はそれらを文字列にしてしまう）。
+export function append(node, children) {
   for (const child of children.flat()) {
     if (child === null || child === undefined || child === false) continue;
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));

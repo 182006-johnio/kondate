@@ -5,6 +5,7 @@ import { exportBackup } from '../export.js';
 import { fitsSlot } from '../schema.js';
 import * as storage from '../storage.js';
 import { clear, el } from './dom.js';
+import { nutritionInputs } from './nutrition-view.js';
 import { pantryEditor } from './pantry-editor.js';
 
 export async function renderSettings(container, ctx) {
@@ -54,11 +55,71 @@ export async function renderSettings(container, ctx) {
 
     pantryEditor(ctx, settings.pantry),
 
+    goalsCard(ctx, settings.goals),
+
+    detailsCard(ctx, counts.details),
+
     el('section', { class: 'card' },
       el('h2', { text: 'バックアップ' }),
       el('p', { class: 'muted small', text: `自分のレシピ ${counts.recipes} 件と献立の枠 ${counts.slots} 件を JSON ファイルに書き出します。iPhone では共有シートの「"ファイル"に保存」から iCloud Drive などを選んでください。` }),
       el('button', { class: 'button primary wide', text: '書き出す', on: { click: runExport } })),
   );
+}
+
+// 1 日の目標。全部空欄なら未設定（null）にする。
+function goalsCard(ctx, goals) {
+  const inputs = nutritionInputs(goals);
+  async function save(event) {
+    event.preventDefault();
+    const values = inputs.values();
+    const next = Object.values(values).every((value) => value === null) ? null : values;
+    try {
+      await storage.updateSettings({ goals: next });
+      ctx.toast(next ? '目標を保存しました' : '目標を未設定にしました');
+      await ctx.refresh();
+    } catch (error) {
+      ctx.toast('目標は 0 以上の数で入れてください');
+    }
+  }
+  return el('section', { class: 'card' },
+    el('h2', { text: '1日の目標' }),
+    el('p', { class: 'muted small', text: '献立の栄養の見込みと比べます。分かる項目だけで構いません。' }),
+    el('form', { class: 'form', on: { submit: save } },
+      inputs.node,
+      el('button', { class: 'button wide', type: 'submit', text: '目標を保存' })));
+}
+
+// 分量データ（private/recipe-details.json）の読み込み。全置換する。
+function detailsCard(ctx, count) {
+  const input = el('input', {
+    type: 'file',
+    accept: 'application/json,.json',
+    hidden: true,
+    on: { change: () => load().catch((error) => ctx.toast(error.message)) },
+  });
+
+  async function load() {
+    const [file] = input.files;
+    input.value = '';
+    if (!file) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      throw new Error('JSON として読めないファイルです');
+    }
+    const next = Object.keys(parsed?.details ?? {}).length;
+    if (!confirm(`分量データを読み込みます。いまの ${count} 件を ${next} 件に置き換えます。よろしいですか？`)) return;
+    const saved = await storage.replaceDetails(parsed);
+    ctx.toast(`分量データ ${saved} 件を読み込みました`);
+    await ctx.refresh();
+  }
+
+  return el('section', { class: 'card' },
+    el('h2', { text: '分量データ' }),
+    el('p', { class: 'muted small', text: `同梱レシピの分量と栄養のデータです（いま ${count} 件）。献立フォルダの private/recipe-details.json を「ファイル」アプリから選んでください。読み込むと全部置き換わります。` }),
+    input,
+    el('button', { class: 'button wide', type: 'button', text: '分量データを読み込む', on: { click: () => input.click() } }));
 }
 
 // 朝食の設定を変え、今日以降の固定していない朝食の枠を入れ替える。

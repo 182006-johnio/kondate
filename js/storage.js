@@ -19,6 +19,7 @@ import {
   normalizeRecipe,
   slotKey,
   validateDB,
+  validateDetails,
   validateRecipe,
   validateSettings,
   validateSlot,
@@ -27,6 +28,7 @@ import {
 const DEFAULT_STORAGE_KEY = 'kondate.v1';
 const PATCHABLE_RECIPE_FIELDS = [
   'name', 'kind', 'meals', 'url', 'protein', 'method', 'ingredients', 'seasonings', 'steps', 'minutes', 'note',
+  'nutrition',
 ];
 const PATCHABLE_SETTINGS_FIELDS = ['breakfast_recipe_id', 'pantry', 'goals'];
 
@@ -236,6 +238,24 @@ export async function updateSettings(patch) {
   return clone(settings);
 }
 
+// --- 分量データ ---------------------------------------------------------
+
+export async function getDetails() {
+  return clone(requireInit().details);
+}
+
+// 読み込んだ分量データで全部置き換える。マージはしない。
+// file は private/recipe-details.json の中身（{ version: 1, details }）。
+export async function replaceDetails(file) {
+  const state = requireInit();
+  if (!isPlainObject(file) || file.version !== 1) {
+    throw new StorageError('分量データのファイルではありません（version 1 の形を想定しています）。');
+  }
+  assertValid(validateDetails(file.details), '分量データ');
+  commit({ ...state, details: clone(file.details) });
+  return Object.keys(file.details).length;
+}
+
 // --- 全体 -------------------------------------------------------------
 
 // 全データのコピー。エクスポートが使う。
@@ -245,7 +265,11 @@ export async function snapshot() {
 
 export async function getCounts() {
   const state = requireInit();
-  return { recipes: state.recipes.length, slots: state.slots.length };
+  return {
+    recipes: state.recipes.length,
+    slots: state.slots.length,
+    details: Object.keys(state.details).length,
+  };
 }
 
 // --- 内部 -------------------------------------------------------------

@@ -124,7 +124,7 @@
 |---|---|---|
 | inventory | string[] | 余っている食材の名前 |
 | shopping_checked | { [週の月曜]: string[] } | 買い物リストで「買った」にした項目 |
-| details | { [recipe_id]: object } | 読み込んだ分量・栄養データ（段階 3 で定義） |
+| details | { [recipe_id]: object } | 読み込んだ分量・栄養データ（下の「分量データ」） |
 
 ### 保存形式
 
@@ -154,6 +154,39 @@
 - 1枠だけの引き直しも同じ条件で選ぶ。固定していた枠を引き直したときは固定のままにする。
 - 一覧から手で選んだ枠は自動で固定する。
 - 設定で朝食を変えたら、今日から献立のある最後の日までの固定していない朝食の枠を入れ替える（無い日には追加する）。
+
+## 栄養計算
+
+MyFitnessPal のように1日のカロリーと栄養を出す。記録ではなく、献立からの見込み。計算は `js/nutrition.js` の純関数。
+
+- 項目は `kcal` / `protein` / `fat` / `carb` / `fiber` / `salt`（g）。すべて1人分。
+- 食品の値は `data/foods.js`。**日本食品標準成分表（八訂）増補2023年（文部科学省）** の本表から、使う食品だけを抜き出したもの（出典を明記して引用。2026年3月27日更新版）。手で数値を直さない。
+- レシピ1人分の栄養:
+  - 自分のレシピ: `recipe.nutrition`（入力した値。全項目空なら null）
+  - 同梱レシピ: 分量データの食材 × 成分表 ÷ `servings`。元ページに栄養値があれば、その項目は元ページの値（`published`）を使う
+  - どちらも無ければ「栄養不明」とし、合計に入れず件数を出す
+- 夕食は毎日、キャベツ半玉 **500g**（生）と炭水化物 **270g** を足す。炭水化物はご飯（めし）。carb パーツが麺のレシピで `base_carb` があれば、その麺（ゆで）で数える。
+- 1日の目標（`settings.goals`）に対する割合を出す。
+
+### 分量データ（端末にだけ置く）
+
+Dラボ（有料）などの分量を含むので、公開リポジトリに入れない。`private/recipe-details.json`（`.gitignore` 済み）を Claude が作り、iPhone の設定画面で読み込む。読み込みは全置換。
+
+```
+{ "version": 1, "details": { "<recipe_id>": {
+    "servings": 2,                       // 何人分の分量か
+    "base_carb": "udon",                 // 麺のレシピだけ。udon / pasta / soba
+    "ingredients": [{ "name": "鶏むね肉", "grams": 400, "food": "chicken_breast_skin" }],
+    "published": { "kcal": 266, ... } | null,   // 元ページの1人分。無い項目は null
+    "note": "..."                        // 換算の前提（任意）
+} } }
+```
+
+- `food` は `data/foods.js` のキー。成分表に無い食品は近い食品で代用し note に書く（例: 白だし → めんつゆ三倍濃縮）。
+- 漬け汁・鍋のつゆなど全部は口に入らないものは、食べる量の目安に減らして note に書く。
+- dressing のキャベツと noodle の麺は、夕食の前提で数えるので分量に入れない。
+- 作り方: `python -I private/make_details.py private/recipe-details.json`（スクリプトも分量を含むので `private/` に置く）。レシピを足したら分量データも足し、iPhone で読み込み直す。
+- `data/foods.js` の作り方: 成分表の Excel を別フォルダにダウンロードし、`tools/xlsx_dump.py`（シート1を TSV に）→ `tools/foods_extract.py`（JSON に）→ `tools/make_foods_js.py`（キーと食品番号の対応から生成）。食品の探し方は `tools/foods_find.py`。
 
 ## エクスポート
 

@@ -1,11 +1,14 @@
 // 献立画面（ホーム）。1 週間分を日ごとのカードで並べる。
 
+import { FOODS } from '../../data/foods.js';
 import { addDays, formatDayLabel, startOfWeek, todayISO, weekDates, weekdayOf } from '../dates.js';
+import { dayNutrition } from '../nutrition.js';
 import { planWeek } from '../planner.js';
 import { MEALS, PARTS, slotKey } from '../schema.js';
 import * as storage from '../storage.js';
-import { clear, el } from './dom.js';
+import { append, clear, el } from './dom.js';
 import { DINNER_BASE, MEAL_LABEL, PART_LABEL } from './labels.js';
+import { daySummary, openDaySheet } from './nutrition-view.js';
 
 const FISH_DAY = 4; // 木曜。planner.js と同じ決まり
 
@@ -16,10 +19,11 @@ export async function renderWeek(container, ctx, requested) {
   const thisWeek = startOfWeek(today);
 
   // 前週の日曜と翌週の月曜も読む。作り直しと引き直しで隣の日と比べるため。
-  const [recipes, nearby, settings] = await Promise.all([
+  const [recipes, nearby, settings, details] = await Promise.all([
     ctx.recipes(),
     storage.getSlots(addDays(weekStart, -1), addDays(weekStart, 7)),
     storage.getSettings(),
+    storage.getDetails(),
   ]);
   const byId = new Map(recipes.map((recipe) => [recipe.id, recipe]));
   const inWeek = nearby.filter((slot) => slot.date >= days[0] && slot.date <= days[6]);
@@ -42,7 +46,7 @@ export async function renderWeek(container, ctx, requested) {
   }
 
   clear(container);
-  container.append(
+  append(container, [
     el('header', { class: 'week-header' },
       el('a', { class: 'icon-button', href: `#/week/${addDays(weekStart, -7)}`, attrs: { 'aria-label': '前の週' }, text: '‹' }),
       el('div', { class: 'week-title' },
@@ -64,11 +68,14 @@ export async function renderWeek(container, ctx, requested) {
       on: { click: () => generate().catch((error) => ctx.toast(error.message)) },
     }),
 
-    el('ol', { class: 'days' }, days.map((date) => dayCard({ date, today, slots, byId, ctx, nearby }))),
-  );
+    el('ol', { class: 'days' }, days.map((date) => dayCard({
+      date, today, slots, byId, ctx, nearby, inWeek, details, goals: settings.goals,
+    }))),
+  ]);
 }
 
-function dayCard({ date, today, slots, byId, ctx, nearby }) {
+function dayCard({ date, today, slots, byId, ctx, nearby, inWeek, details, goals }) {
+  const day = dayNutrition({ slots: inWeek.filter((slot) => slot.date === date), byId, details, foods: FOODS });
   const rows = [];
   for (const meal of MEALS) {
     if (meal === 'dinner') rows.push(el('li', { class: 'base', text: `夕 ${DINNER_BASE}` }));
@@ -83,7 +90,12 @@ function dayCard({ date, today, slots, byId, ctx, nearby }) {
       formatDayLabel(date),
       date === today ? el('span', { class: 'chip strong', text: '今日' }) : null,
       weekdayOf(date) === FISH_DAY ? el('span', { class: 'chip fish', text: '魚の日' }) : null),
-    el('ul', { class: 'slots' }, rows));
+    el('ul', { class: 'slots' }, rows),
+    el('button', {
+      class: 'day-nutrition',
+      text: daySummary(day),
+      on: { click: () => openDaySheet(ctx.sheet, date, day, goals) },
+    }));
 }
 
 function slotRow({ date, meal, part, slot, recipe, ctx, nearby }) {

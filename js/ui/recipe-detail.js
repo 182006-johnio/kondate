@@ -1,13 +1,17 @@
 // レシピ詳細。自分のレシピなら編集・削除もここから行う。
 
+import { FOODS } from '../../data/foods.js';
+import { recipeNutrition } from '../nutrition.js';
 import { missingSeasonings } from '../schema.js';
 import * as storage from '../storage.js';
 import { clear, el } from './dom.js';
 import { KIND_LABEL, MEAL_LABEL, METHOD_LABEL, PROTEIN_LABEL, SOURCE_LABEL } from './labels.js';
+import { nutritionTable } from './nutrition-view.js';
 
 export async function renderRecipe(container, ctx, id) {
   const recipe = (await ctx.recipes()).find((candidate) => candidate.id === id);
-  const { pantry } = await storage.getSettings();
+  const [{ pantry }, details] = await Promise.all([storage.getSettings(), storage.getDetails()]);
+  const perServing = recipeNutrition(recipe, details, FOODS);
 
   clear(container);
   container.append(backLink());
@@ -58,6 +62,13 @@ export async function renderRecipe(container, ctx, id) {
         ? section('作り方', el('ol', { class: 'steps' }, recipe.steps.map((step) => el('li', { text: step }))))
         : null,
       recipe.note ? section('メモ', el('p', { class: 'pre', text: recipe.note })) : null,
+      section('栄養（1人分の目安）', perServing
+        ? el('div', {},
+          nutritionTable(perServing.values),
+          details[recipe.id]?.note ? el('p', { class: 'muted small', text: details[recipe.id].note }) : null)
+        : el('p', { class: 'muted', text: mine
+          ? '未入力です。編集画面で入れられます。'
+          : '分量データがありません。設定の「分量データを読み込む」で読み込むと表示されます。' })),
 
       mine
         ? el('div', { class: 'row-actions' },
