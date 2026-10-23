@@ -762,16 +762,14 @@ test('dlab と external は分量と手順を載せず、リンクを持つ', ()
   assertEqual(problems, [], '問題');
 });
 
-test('arrange は手順と調味料の分量を持つ', () => {
-  const problems = RECIPES
-    .filter((recipe) => recipe.source === 'arrange')
-    .flatMap((recipe) => {
-      const found = [];
-      if (recipe.steps.length === 0) found.push(`${recipe.id}: 手順が無い`);
-      if (recipe.seasonings.some((item) => item.amount === '')) found.push(`${recipe.id}: 分量の無い調味料`);
-      return found;
-    });
-  assertEqual(problems, [], '問題');
+test('同梱レシピは Dラボと外部サイトだけ（応用レシピを載せない）', () => {
+  const others = RECIPES.filter((recipe) => !['dlab', 'external'].includes(recipe.source)).map((recipe) => recipe.id);
+  assertEqual(others, [], 'dlab / external 以外');
+});
+
+test('同梱レシピには木曜に回せる魚の protein パーツがある', () => {
+  const fish = RECIPES.filter((recipe) => recipe.kind === 'protein' && recipe.protein === 'fish');
+  assert(fish.length >= 2, `魚の protein パーツが ${fish.length} 件しかない`);
 });
 
 test('同梱レシピは昼の一品と夕の各パーツを 1 週間回せる数（7 件以上）ある', () => {
