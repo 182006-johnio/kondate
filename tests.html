@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>テスト</title>
+<style>
+  body {
+    margin: 0;
+    padding: 1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    background: #111;
+    color: #ddd;
+  }
+  h1 { font-size: 1rem; margin: 0 0 0.5rem; }
+  #summary { margin: 0 0 1rem; font-weight: bold; white-space: pre-wrap; }
+  .case { white-space: pre-wrap; padding: 0.15rem 0; }
+  .pass { color: #6ee787; }
+  .fail { color: #ff7b72; }
+</style>
+</head>
+<body>
+<h1>テスト</h1>
+<p id="summary">実行中…</p>
+
+<div id="output"></div>
+<script>
+  // tests.js が一度も動かなかった場合に「実行中…」のまま黙って止まらないようにする。
+  // file:// で開くと ES Modules は CORS で弾かれ、エラーも画面に出ないまま何も起きない。
+  setTimeout(function () {
+    var summary = document.getElementById('summary');
+    if (summary.dataset.started === '1') return;
+    summary.className = 'fail';
+    summary.textContent = location.protocol === 'file:'
+      ? 'テストを実行できませんでした。file:// では ES Modules を読み込めません。'
+        + '献立フォルダで次を実行し、http://localhost:8124/tests.html を開いてください。\n'
+        + '  python -m http.server 8124'
+      : 'テストを開始できませんでした。ブラウザのコンソールを確認してください。';
+  }, 2000);
+</script>
+<script type="module" src="js/tests.js"></script>
+</body>
+</html>
