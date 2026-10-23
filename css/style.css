@@ -594,6 +594,22 @@ a {
   flex: 1;
 }
 
+/* --- 設定 --------------------------------------------------------------- */
+
+.card {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+
+.card p {
+  margin: 0;
+}
+
 /* --- フォーム ----------------------------------------------------------- */
 
 .form {

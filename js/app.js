@@ -9,6 +9,7 @@ import { clear, el } from './ui/dom.js';
 import { renderRecipe } from './ui/recipe-detail.js';
 import { renderRecipeForm } from './ui/recipe-form.js';
 import { renderRecipeList } from './ui/recipe-list.js';
+import { renderSettings } from './ui/settings.js';
 import { openSlotSheet } from './ui/slot-sheet.js';
 import { renderWeek } from './ui/week.js';
 
@@ -48,6 +49,7 @@ const ROUTES = [
   [/^#\/recipe\/(.+)$/, (match) => renderRecipe(view, ctx, decodeURIComponent(match[1])), 'recipes'],
   [/^#\/recipe-new(?:\?(.*))?$/, (match) => renderRecipeForm(view, ctx, { query: match[1] ?? '' }), 'recipes'],
   [/^#\/recipe-edit\/(.+)$/, (match) => renderRecipeForm(view, ctx, { id: decodeURIComponent(match[1]) }), 'recipes'],
+  [/^#\/settings$/, () => renderSettings(view, ctx), 'settings'],
 ];
 
 // moved は画面を移ったとき true。同じ画面の描き直し（枠を変えたあとなど）では
