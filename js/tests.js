@@ -5,6 +5,8 @@
 import { PANTRY } from '../data/pantry.js';
 import { RECIPES } from '../data/recipes.js';
 import * as dates from './dates.js';
+// export は予約語なので、モジュールの束縛名は backup にする。
+import * as backup from './export.js';
 import * as planner from './planner.js';
 import * as schema from './schema.js';
 import * as storage from './storage.js';
@@ -682,6 +684,117 @@ test('同梱レシピで週を作るとルールを破らない（seed を変え
     assertEqual(slots.length, 7 * 4, `seed ${seed} 枠の数`);
     assertEqual(ruleViolations(slots, RECIPES), [], `seed ${seed}`);
   }
+});
+
+// --- export（エクスポート） --------------------------------------------
+
+// storage を経由せず、その場で組み立てる。
+function sampleBackup() {
+  const db = schema.createDB();
+  db.recipes = [{ ...schema.normalizeRecipe({ ...BREAKFAST, id: crypto.randomUUID() }) }];
+  db.slots = [slot('2026-10-19', 'breakfast', 'dish', db.recipes[0].id), slot('2026-10-19', 'dinner', 'protein', 'dlab-001', true)];
+  db.settings.breakfast_recipe_id = db.recipes[0].id;
+  return db;
+}
+
+// share / canShare の偽物。呼ばれた引数を記録する。
+function fakeNav({ canShare = true, shareError = null } = {}) {
+  const calls = [];
+  return {
+    calls,
+    canShare: () => canShare,
+    share: async (data) => {
+      calls.push(data);
+      if (shareError) throw shareError;
+    },
+  };
+}
+
+function namedError(name) {
+  const error = new Error(name);
+  error.name = name;
+  return error;
+}
+
+test('backupFilename は日付入りのファイル名を返す', () => {
+  assertEqual(backup.backupFilename('2026-10-23'), 'kondate-2026-10-23.json', 'ファイル名');
+  assertEqual(backup.backupFilename(), `kondate-${dates.todayISO()}.json`, '省略時は今日');
+});
+
+test('serializeBackup の JSON を読み戻すと validateDB を通り、内容が一致する', () => {
+  const data = sampleBackup();
+  const parsed = JSON.parse(backup.serializeBackup(data));
+  assertEqual(schema.validateDB(parsed).errors, [], '検証エラー');
+  assertEqual(parsed, data, '内容');
+});
+
+test('serializeBackup は storage.snapshot() の形をそのまま書き出す', async () => {
+  await freshStore();
+  const added = await storage.addRecipe(BREAKFAST);
+  await storage.updateSettings({ breakfast_recipe_id: added.id });
+  const parsed = JSON.parse(backup.serializeBackup(await storage.snapshot()));
+  assertEqual(Object.keys(parsed), ['schemaVersion', 'recipes', 'slots', 'settings'], 'キー');
+  assertEqual(schema.validateDB(parsed).errors, [], '検証エラー');
+});
+
+test('canUseShare は share と canShare の両方が使えるときだけ true', () => {
+  const file = new File(['{}'], 'a.json', { type: 'application/json' });
+  const share = async () => {};
+  assert(backup.canUseShare({ share, canShare: () => true }, file), '両方あれば使える');
+  assert(!backup.canUseShare({ share, canShare: () => false }, file), 'canShare が false');
+  assert(!backup.canUseShare({ canShare: () => true }, file), 'share が無い');
+  assert(!backup.canUseShare({ share }, file), 'canShare が無い');
+  assert(!backup.canUseShare({}, file), '何も無い');
+  assert(!backup.canUseShare(undefined, file), 'navigator が無い');
+  assert(!backup.canUseShare({ share, canShare: () => { throw new Error('x'); } }, file), 'canShare が例外を投げる');
+});
+
+test('exportBackup は共有シートが使えれば File を 1 つ渡して共有する', async () => {
+  const nav = fakeNav();
+  const result = await backup.exportBackup({
+    today: '2026-10-23', nav, data: sampleBackup(), download: () => { throw new Error('ダウンロードした'); },
+  });
+  assertEqual(result, { method: 'share', filename: 'kondate-2026-10-23.json', cancelled: false }, '結果');
+  assertEqual(nav.calls.length, 1, 'share の呼び出し回数');
+  const [file] = nav.calls[0].files;
+  assertEqual([file.name, file.type], ['kondate-2026-10-23.json', 'application/json'], 'File');
+  assertEqual(schema.validateDB(JSON.parse(await file.text())).errors, [], '中身が保存データとして正しい');
+});
+
+test('exportBackup は共有シートを閉じただけなら失敗にしない', async () => {
+  const nav = fakeNav({ shareError: namedError('AbortError') });
+  const result = await backup.exportBackup({ today: '2026-10-23', nav, data: sampleBackup() });
+  assertEqual([result.method, result.cancelled], ['share', true], '結果');
+});
+
+test('exportBackup は共有シートの失敗をダウンロードに切り替えず投げ直す', async () => {
+  let downloaded = false;
+  const nav = fakeNav({ shareError: namedError('NotAllowedError') });
+  await assertThrows(() => backup.exportBackup({
+    today: '2026-10-23', nav, data: sampleBackup(), download: () => { downloaded = true; },
+  }), 'NotAllowedError');
+  assert(!downloaded, 'ダウンロードに切り替えてしまった');
+});
+
+test('exportBackup は共有シートが使えなければダウンロードする', async () => {
+  let downloaded = null;
+  const result = await backup.exportBackup({
+    today: '2026-10-23',
+    nav: fakeNav({ canShare: false }),
+    data: sampleBackup(),
+    download: (file, filename) => { downloaded = { name: file.name, filename }; },
+  });
+  assertEqual([result.method, result.cancelled], ['download', false], '経路');
+  assertEqual(downloaded, { name: 'kondate-2026-10-23.json', filename: 'kondate-2026-10-23.json' }, 'ダウンロード');
+});
+
+test('exportBackup は data を省略すると storage の中身を書き出す', async () => {
+  await freshStore();
+  await storage.addRecipe(BREAKFAST);
+  const nav = fakeNav();
+  await backup.exportBackup({ today: '2026-10-23', nav });
+  const parsed = JSON.parse(await nav.calls[0].files[0].text());
+  assertEqual(parsed.recipes.map((recipe) => recipe.name), [BREAKFAST.name], '自分のレシピ');
 });
 
 // --- 実行 -------------------------------------------------------------
