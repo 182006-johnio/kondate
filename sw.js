@@ -10,7 +10,7 @@
 //
 // ファイルを変えたら CACHE の名前を変える。ファイルを足したら PRECACHE にも足す。
 
-const CACHE = 'kondate-v1';
+const CACHE = 'kondate-v2';
 
 const PRECACHE = [
   './',
