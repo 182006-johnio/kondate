@@ -20,6 +20,8 @@
 - Windows のブラウザは Blink 系のため、そこで動いても WebKit で動く保証はない。iOS 固有の挙動は実機確認を前提に書く。
 - 実機確認には HTTPS が必要。GitHub Pages に置いて iPhone から開く。
 - ローカルでの確認は `python -m http.server 8124` を献立フォルダで実行し、`http://localhost:8124/` を開く。file:// では ES Modules を読み込めない。
+- アプリのファイルを変えたら `sw.js` の `CACHE` の名前を上げる（`kondate-v1` → `kondate-v2`）。ファイルを足したら `PRECACHE` にも足す。上げ忘れると iPhone では古い版のまま動き続ける。
+- Claude Code 内蔵のブラウザでは Service Worker を登録できない。PWA の動作は iPhone の実機で確かめる。
 
 ## 絶対制約（変更しないこと）
 
