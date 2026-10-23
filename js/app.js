@@ -6,6 +6,8 @@
 import { RECIPES } from '../data/recipes.js';
 import * as storage from './storage.js';
 import { clear, el } from './ui/dom.js';
+import { renderRecipe } from './ui/recipe-detail.js';
+import { renderRecipeList } from './ui/recipe-list.js';
 import { openSlotSheet } from './ui/slot-sheet.js';
 import { renderWeek } from './ui/week.js';
 
@@ -41,9 +43,13 @@ const ctx = {
 // [正規表現, 描画関数, タブ名]。上から順に最初に合ったものを使う。
 const ROUTES = [
   [/^#\/week(?:\/(\d{4}-\d{2}-\d{2}))?$/, (match) => renderWeek(view, ctx, match[1]), 'week'],
+  [/^#\/recipes(?:\/(\w+))?$/, (match) => renderRecipeList(view, ctx, match[1]), 'recipes'],
+  [/^#\/recipe\/(.+)$/, (match) => renderRecipe(view, ctx, decodeURIComponent(match[1])), 'recipes'],
 ];
 
-async function render() {
+// moved は画面を移ったとき true。同じ画面の描き直し（枠を変えたあとなど）では
+// スクロール位置を保つ。
+async function render(moved = false) {
   const hash = location.hash || '#/week';
   for (const [pattern, draw, tab] of ROUTES) {
     const match = hash.match(pattern);
@@ -51,6 +57,7 @@ async function render() {
     markTab(tab);
     try {
       await draw(match);
+      if (moved) window.scrollTo(0, 0);
     } catch (error) {
       showError(error);
     }
@@ -82,7 +89,7 @@ async function start() {
     showError(error);
     return;
   }
-  window.addEventListener('hashchange', render);
+  window.addEventListener('hashchange', () => render(true));
   await render();
 }
 
