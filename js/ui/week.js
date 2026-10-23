@@ -4,7 +4,7 @@ import { FOODS } from '../../data/foods.js';
 import { addDays, formatDayLabel, startOfWeek, todayISO, weekDates, weekdayOf } from '../dates.js';
 import { dayNutrition } from '../nutrition.js';
 import { planWeek } from '../planner.js';
-import { MEALS, PARTS, slotKey } from '../schema.js';
+import { MEALS, PARTS, inventoryMatches, slotKey } from '../schema.js';
 import * as storage from '../storage.js';
 import { append, clear, el } from './dom.js';
 import { DINNER_BASE, MEAL_LABEL, PART_LABEL } from './labels.js';
@@ -19,11 +19,12 @@ export async function renderWeek(container, ctx, requested) {
   const thisWeek = startOfWeek(today);
 
   // 前週の日曜と翌週の月曜も読む。作り直しと引き直しで隣の日と比べるため。
-  const [recipes, nearby, settings, details] = await Promise.all([
+  const [recipes, nearby, settings, details, inventory] = await Promise.all([
     ctx.recipes(),
     storage.getSlots(addDays(weekStart, -1), addDays(weekStart, 7)),
     storage.getSettings(),
     storage.getDetails(),
+    storage.getInventory(),
   ]);
   const byId = new Map(recipes.map((recipe) => [recipe.id, recipe]));
   const inWeek = nearby.filter((slot) => slot.date >= days[0] && slot.date <= days[6]);
@@ -39,6 +40,7 @@ export async function renderWeek(container, ctx, requested) {
       breakfastRecipeId: settings.breakfast_recipe_id,
       random: Math.random,
       pantry: settings.pantry,
+      inventory,
     });
     await storage.putSlots(planned);
     ctx.toast(hasUnlocked ? '固定以外を作り直しました' : '献立を作りました');
@@ -69,19 +71,21 @@ export async function renderWeek(container, ctx, requested) {
     }),
 
     el('ol', { class: 'days' }, days.map((date) => dayCard({
-      date, today, slots, byId, ctx, nearby, inWeek, details, goals: settings.goals,
+      date, today, slots, byId, ctx, nearby, inWeek, details, goals: settings.goals, inventory,
     }))),
   ]);
 }
 
-function dayCard({ date, today, slots, byId, ctx, nearby, inWeek, details, goals }) {
+function dayCard({ date, today, slots, byId, ctx, nearby, inWeek, details, goals, inventory }) {
   const day = dayNutrition({ slots: inWeek.filter((slot) => slot.date === date), byId, details, foods: FOODS });
   const rows = [];
   for (const meal of MEALS) {
     if (meal === 'dinner') rows.push(el('li', { class: 'base', text: `夕 ${DINNER_BASE}` }));
     for (const part of PARTS[meal]) {
       const slot = slots.get(slotKey(date, meal, part)) ?? null;
-      rows.push(el('li', {}, slotRow({ date, meal, part, slot, recipe: slot ? byId.get(slot.recipe_id) : null, ctx, nearby })));
+      rows.push(el('li', {}, slotRow({
+        date, meal, part, slot, recipe: slot ? byId.get(slot.recipe_id) : null, ctx, nearby, inventory,
+      })));
     }
   }
 
@@ -98,7 +102,8 @@ function dayCard({ date, today, slots, byId, ctx, nearby, inWeek, details, goals
     }));
 }
 
-function slotRow({ date, meal, part, slot, recipe, ctx, nearby }) {
+function slotRow({ date, meal, part, slot, recipe, ctx, nearby, inventory }) {
+  const leftovers = recipe ? inventoryMatches(recipe, inventory) : [];
   const label = meal === 'dinner' ? PART_LABEL[part] : MEAL_LABEL[meal];
   let name = '未提案';
   if (slot) name = recipe ? recipe.name : '見つからないレシピ';
@@ -109,6 +114,8 @@ function slotRow({ date, meal, part, slot, recipe, ctx, nearby }) {
     on: { click: () => ctx.openSlot({ date, meal, part, slot, recipe, nearby }) },
   },
   el('span', { class: meal === 'dinner' ? 'slot-label sub' : 'slot-label', text: label }),
-  el('span', { class: 'slot-name', text: name }),
+  el('span', { class: 'slot-name' },
+    name,
+    leftovers.length > 0 ? el('span', { class: 'chip leftover', text: `余り: ${leftovers.join('・')}` }) : null),
   slot?.locked ? el('span', { class: 'lock', attrs: { 'aria-label': '固定' }, text: '🔒' }) : null);
 }

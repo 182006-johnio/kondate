@@ -35,6 +35,7 @@ const PRECACHE = [
   './js/ui/recipe-form.js',
   './js/ui/recipe-list.js',
   './js/ui/settings.js',
+  './js/ui/shopping.js',
   './js/ui/slot-sheet.js',
   './js/ui/week.js',
   './icons/icon-180.png',

@@ -3,7 +3,7 @@
 
 import { formatDayLabel, weekdayOf } from '../dates.js';
 import { rerollSlot } from '../planner.js';
-import { fitsSlot, missingSeasonings } from '../schema.js';
+import { fitsSlot, inventoryMatches, missingSeasonings } from '../schema.js';
 import * as storage from '../storage.js';
 import { clear, el } from './dom.js';
 import { MEAL_LABEL, METHOD_LABEL, PART_LABEL, PROTEIN_LABEL } from './labels.js';
@@ -91,9 +91,9 @@ function showActions(ctx, info) {
 }
 
 async function reroll(ctx, { date, meal, part, slot, nearby }) {
-  const { pantry } = await storage.getSettings();
+  const [{ pantry }, inventory] = await Promise.all([storage.getSettings(), storage.getInventory()]);
   const next = rerollSlot({
-    date, meal, part, recipes: await ctx.recipes(), slots: nearby, random: Math.random, pantry,
+    date, meal, part, recipes: await ctx.recipes(), slots: nearby, random: Math.random, pantry, inventory,
   });
   if (!next) throw new Error('この枠に入れられるレシピがありません');
   // 固定していた枠を引き直したときは、固定のままにする。
@@ -105,7 +105,7 @@ async function showPicker(ctx, info) {
   const sheet = ctx.sheet;
   const fishDay = meal === 'dinner' && part === 'protein' && weekdayOf(date) === FISH_DAY;
 
-  const { pantry } = await storage.getSettings();
+  const [{ pantry }, inventory] = await Promise.all([storage.getSettings(), storage.getInventory()]);
   const candidates = (await ctx.recipes())
     .filter((recipe) => fitsSlot(recipe, meal, part))
     .sort((a, b) => {
@@ -148,6 +148,7 @@ async function showPicker(ctx, info) {
     for (const recipe of shown) {
       // 手で選ぶときは家に無い調味料のレシピも選べる。買い足す前提で選ぶこともあるため。
       const missing = missingSeasonings(recipe, pantry);
+      const leftovers = inventoryMatches(recipe, inventory);
       list.append(el('li', {},
         el('button', {
           class: recipe.id === slot?.recipe_id ? 'pick current' : 'pick',
@@ -155,6 +156,7 @@ async function showPicker(ctx, info) {
         },
         el('span', { class: 'pick-name', text: recipe.name }),
         el('span', { class: 'pick-meta', text: `${PROTEIN_LABEL[recipe.protein]}・${METHOD_LABEL[recipe.method]}` }),
+        leftovers.length > 0 ? el('span', { class: 'chip leftover', text: `余り: ${leftovers.join('・')}` }) : null,
         missing.length > 0
           ? el('span', { class: 'pick-warn', text: `家に無い調味料: ${missing.join('、')}` })
           : null)));

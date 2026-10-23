@@ -10,6 +10,7 @@ import { renderRecipe } from './ui/recipe-detail.js';
 import { renderRecipeForm } from './ui/recipe-form.js';
 import { renderRecipeList } from './ui/recipe-list.js';
 import { renderSettings } from './ui/settings.js';
+import { renderShopping } from './ui/shopping.js';
 import { openSlotSheet } from './ui/slot-sheet.js';
 import { renderWeek } from './ui/week.js';
 
@@ -49,6 +50,7 @@ const ROUTES = [
   [/^#\/recipe\/(.+)$/, (match) => renderRecipe(view, ctx, decodeURIComponent(match[1])), 'recipes'],
   [/^#\/recipe-new(?:\?(.*))?$/, (match) => renderRecipeForm(view, ctx, { query: match[1] ?? '' }), 'recipes'],
   [/^#\/recipe-edit\/(.+)$/, (match) => renderRecipeForm(view, ctx, { id: decodeURIComponent(match[1]) }), 'recipes'],
+  [/^#\/shopping$/, () => renderShopping(view, ctx), 'shopping'],
   [/^#\/settings$/, () => renderSettings(view, ctx), 'settings'],
 ];
 

@@ -650,6 +650,73 @@ test('rerollSlot も家に無い調味料を使うレシピを避ける', () => 
   }
 });
 
+test('sameIngredient はどちらかが含めば同じとみなし、表記をそろえて比べる', () => {
+  assert(schema.sameIngredient('鶏むね肉', '鶏むね肉（皮なし）'), '含む');
+  assert(schema.sameIngredient('鶏むね肉（皮なし）', '鶏むね肉'), '逆向き');
+  assert(schema.sameIngredient(' ｷｬﾍﾞﾂ ', 'キャベツ'), '半角カナと空白');
+  assert(!schema.sameIngredient('豚肉', '牛肉'), '別の食材');
+  assert(!schema.sameIngredient('', 'キャベツ'), '空');
+});
+
+test('inventoryMatches は食材だけを見て、当たった余り食材の名前を返す', () => {
+  const recipe = makeRecipe({
+    ingredients: [{ name: '鶏むね肉（皮なし）', amount: '' }, { name: 'キャベツ', amount: '' }],
+    seasonings: [{ name: '塩', amount: '' }],
+  });
+  assertEqual(schema.inventoryMatches(recipe, ['鶏むね肉', '塩', 'にんじん']), ['鶏むね肉'], '当たったもの');
+});
+
+test('addInventory は表記をそろえて足し、重複は足さない。removeInventory で外せる', async () => {
+  await freshStore();
+  assert(await storage.addInventory(' ｷｬﾍﾞﾂ '), '足せた');
+  assert(!(await storage.addInventory('キャベツ')), '重複は足さない');
+  await assertThrows(() => storage.addInventory('  '), '空');
+  assertEqual(await storage.getInventory(), ['キャベツ'], '一覧');
+  assert(await storage.removeInventory('キャベツ'), '外せた');
+  assert(!(await storage.removeInventory('キャベツ')), '2 回目は false');
+});
+
+test('planWeek は余り食材を使うレシピを優先し、一度使ったら優先しない', () => {
+  // protein パーツ 8 件（7 日で重複しなくて済む数）のうち、1 件だけ「なす」を使う。
+  const recipes = Array.from({ length: 8 }, (_, i) => makeRecipe({
+    id: `p${i}`,
+    protein: PROTEINS[i % PROTEINS.length],
+    ingredients: [{ name: i === 2 ? 'なす' : '玉ねぎ', amount: '' }],
+  }));
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const slots = run({ recipes, random: seeded(seed), inventory: ['なす'] });
+    // 月曜（最初に選ぶ枠）で余り食材のレシピが選ばれる。
+    assertEqual(byKey(slots).get(`${WEEK} dinner protein`).recipe_id, 'p2', `seed ${seed} 月曜`);
+    assertEqual(slots.filter((item) => item.recipe_id === 'p2').length, 1, `seed ${seed} 使うのは 1 回`);
+  }
+});
+
+test('planWeek は余り食材の優先でほかの決まりを破らない（seed を変えて 30 回）', () => {
+  const recipes = variedRecipes().map((recipe, i) => (i % 5 === 0
+    ? { ...recipe, ingredients: [{ name: 'なす', amount: '' }] }
+    : recipe));
+  const inventory = ['なす'];
+  for (let seed = 1; seed <= 30; seed += 1) {
+    const slots = run({ recipes, random: seeded(seed), inventory });
+    assertEqual(ruleViolations(slots, recipes), [], `seed ${seed}`);
+  }
+});
+
+test('rerollSlot も余り食材を使うレシピを優先する', () => {
+  const recipes = [
+    makeRecipe({ id: 'a' }),
+    makeRecipe({ id: 'b', ingredients: [{ name: 'なす', amount: '' }] }),
+    makeRecipe({ id: 'c' }),
+  ];
+  const current = slot('2026-10-20', 'dinner', 'protein', 'a');
+  for (let seed = 1; seed <= 10; seed += 1) {
+    const next = planner.rerollSlot({
+      date: current.date, meal: 'dinner', part: 'protein', recipes, slots: [current], random: seeded(seed), inventory: ['なす'],
+    });
+    assertEqual(next.recipe_id, 'b', `seed ${seed}`);
+  }
+});
+
 const THURSDAY = '2026-10-22';
 
 test('weekdayOf は曜日を返す', () => {

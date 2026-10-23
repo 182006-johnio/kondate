@@ -15,9 +15,12 @@
 //
 // 木曜は魚の日。木曜夕の protein パーツは魚（protein: fish）から選ぶ。
 // 魚のレシピが 1 件も無いときだけ、この決まりを外す。
+//
+// inventory（余り食材）を渡すと、上の条件を満たした候補の中で余り食材を使うレシピを優先する。
+// 優先は最後にかけるだけで、上の条件を破ってまで余り食材を使うことはしない。
 
 import { addDays, weekDates, weekdayOf } from './dates.js';
-import { MEALS, PARTS, fitsSlot, missingSeasonings, slotKey } from './schema.js';
+import { MEALS, PARTS, fitsSlot, inventoryMatches, missingSeasonings, slotKey } from './schema.js';
 
 // 朝食は毎日同じものを出す前提なので、重複・protein の比較に入れない。
 const COMPARED_MEALS = ['lunch', 'dinner'];
@@ -33,7 +36,9 @@ function requiredProtein(date, meal, part) {
 //
 // slots には前週の日曜を含めて渡す（月曜の夕食を前日と比べるため）。
 // 週の中の固定枠はそのまま返し、固定していない枠は作り直す。
-export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random, pantry = null }) {
+export function planWeek({
+  weekStart, recipes, slots, breakfastRecipeId, random, pantry = null, inventory = [],
+}) {
   const days = weekDates(weekStart);
   const inWeek = new Set(days);
 
@@ -45,7 +50,7 @@ export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random,
     decided.set(keyOf(slot), slot);
   }
 
-  const context = { recipes, byId: indexById(recipes), days, random, pantry };
+  const context = { recipes, byId: indexById(recipes), days, random, pantry, inventory };
   const result = [];
 
   for (const date of days) {
@@ -76,7 +81,7 @@ export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random,
 // 1 枠だけ引き直す。今のレシピは避けるが、他に候補が無ければ今のレシピを返す。
 // slots には週の全枠と前週の日曜・翌週の月曜を含めて渡す。
 // 返すのは新しい枠（固定なし）。候補が 1 件も無いときは null。
-export function rerollSlot({ date, meal, part, recipes, slots, random, pantry = null }) {
+export function rerollSlot({ date, meal, part, recipes, slots, random, pantry = null, inventory = [] }) {
   const key = slotKey(date, meal, part);
   const decided = new Map();
   let currentId = null;
@@ -94,6 +99,7 @@ export function rerollSlot({ date, meal, part, recipes, slots, random, pantry = 
     days: weekDates(date),
     random,
     pantry,
+    inventory,
     date,
     meal,
     part,
@@ -105,7 +111,7 @@ export function rerollSlot({ date, meal, part, recipes, slots, random, pantry = 
 
 // --- 内部 -------------------------------------------------------------
 
-function pickRecipe({ recipes, byId, days, random, pantry, date, meal, part, decided, exclude }) {
+function pickRecipe({ recipes, byId, days, random, pantry, inventory = [], date, meal, part, decided, exclude }) {
   let fitting = recipes.filter((recipe) => fitsSlot(recipe, meal, part)
     && (pantry === null || missingSeasonings(recipe, pantry).length === 0));
   const required = requiredProtein(date, meal, part);
@@ -141,9 +147,20 @@ function pickRecipe({ recipes, byId, days, random, pantry, date, meal, part, dec
   for (let count = rules.length; count >= 0; count -= 1) {
     const active = rules.slice(0, count);
     const candidates = pool.filter((recipe) => active.every((rule) => rule(recipe)));
-    if (candidates.length > 0) return choose(candidates, random).id;
+    if (candidates.length === 0) continue;
+    const leftovers = unusedLeftovers(inventory, used, byId);
+    const usingLeftovers = candidates.filter((recipe) => inventoryMatches(recipe, leftovers).length > 0);
+    return choose(usingLeftovers.length > 0 ? usingLeftovers : candidates, random).id;
   }
   return null; // pool が空でない限りここには来ない（count = 0 で必ず候補がある）
+}
+
+// 余り食材のうち、その週のまだどのレシピにも使われていないもの。
+// 余りは一度使えば片付くので、使ったあとは優先しない（同じ食材ばかり続かないように）。
+function unusedLeftovers(inventory, usedIds, byId) {
+  if (inventory.length === 0) return inventory;
+  const usedRecipes = [...usedIds].map((id) => byId.get(id)).filter(Boolean);
+  return inventory.filter((name) => !usedRecipes.some((recipe) => inventoryMatches(recipe, [name]).length > 0));
 }
 
 // 週の中の昼・夕で使っているレシピ。

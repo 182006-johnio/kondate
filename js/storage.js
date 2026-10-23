@@ -20,6 +20,7 @@ import {
   slotKey,
   validateDB,
   validateDetails,
+  validateNames,
   validateRecipe,
   validateSettings,
   validateSlot,
@@ -236,6 +237,33 @@ export async function updateSettings(patch) {
   if (settings.breakfast_recipe_id !== null) assertKnownRecipe(state, settings.breakfast_recipe_id);
   commit({ ...state, settings });
   return clone(settings);
+}
+
+// --- 余り食材 -----------------------------------------------------------
+
+export async function getInventory() {
+  return clone(requireInit().inventory);
+}
+
+// 表記をそろえて足す。すでにあれば何もしない。返り値は足したかどうか。
+export async function addInventory(name) {
+  const state = requireInit();
+  const [normalized] = normalizeNames([name]);
+  if (normalized === undefined) throw new StorageError('食材の名前を入れてください。');
+  if (state.inventory.includes(normalized)) return false;
+  const inventory = [...state.inventory, normalized];
+  const errors = validateNames(inventory, '余り食材', 80);
+  if (errors.length > 0) throw new StorageError(errors.join('\n'));
+  commit({ ...state, inventory });
+  return true;
+}
+
+export async function removeInventory(name) {
+  const state = requireInit();
+  const inventory = state.inventory.filter((item) => item !== name);
+  if (inventory.length === state.inventory.length) return false;
+  commit({ ...state, inventory });
+  return true;
 }
 
 // --- 分量データ ---------------------------------------------------------

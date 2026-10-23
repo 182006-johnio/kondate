@@ -99,6 +99,20 @@ export function normalizeNames(values) {
   return names;
 }
 
+// 食材名どうしが同じものを指しているか。どちらかがもう一方を含めば同じとみなす
+// （余り食材「鶏むね肉」とレシピの「鶏むね肉（皮なし）」を同じにするため）。
+export function sameIngredient(a, b) {
+  const x = normalizeName(a);
+  const y = normalizeName(b);
+  if (x === '' || y === '') return false;
+  return x.includes(y) || y.includes(x);
+}
+
+// そのレシピの食材のうち、余り食材に当たるものの名前（余り食材側の表記）。調味料は見ない。
+export function inventoryMatches(recipe, inventory) {
+  return inventory.filter((name) => recipe.ingredients.some((item) => sameIngredient(item.name, name)));
+}
+
 // そのレシピの調味料がすべて家にあるか。表記は normalizeName でそろえて比べる。
 export function missingSeasonings(recipe, pantry) {
   const have = new Set(pantry.map(normalizeName));

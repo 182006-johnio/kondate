@@ -164,6 +164,13 @@ a {
   color: var(--fish);
 }
 
+.chip.leftover {
+  margin-left: 6px;
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
 .link {
   font-size: 0.85rem;
   font-weight: 600;
