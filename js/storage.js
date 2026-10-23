@@ -8,6 +8,8 @@
 // 差し替えたときに呼び出し側を書き直さずに済むようにしてある。
 
 import {
+  MEALS,
+  PARTS,
   SCHEMA_VERSION,
   createDB,
   createRecipe,
@@ -21,7 +23,9 @@ import {
 } from './schema.js';
 
 const DEFAULT_STORAGE_KEY = 'kondate.v1';
-const PATCHABLE_RECIPE_FIELDS = ['name', 'meals', 'url', 'protein', 'ingredients', 'steps', 'minutes', 'note'];
+const PATCHABLE_RECIPE_FIELDS = [
+  'name', 'kind', 'meals', 'url', 'protein', 'method', 'ingredients', 'seasonings', 'steps', 'minutes', 'note',
+];
 const PATCHABLE_SETTINGS_FIELDS = ['breakfast_recipe_id'];
 
 let storageKey = DEFAULT_STORAGE_KEY;
@@ -150,7 +154,7 @@ export async function getSlots(from, to) {
   return clone(slots);
 }
 
-// 1 枠を書く。(date, meal) は一意なので、既存があれば置き換える。
+// 1 枠を書く。(date, meal, part) は一意なので、既存があれば置き換える。
 export async function putSlot(fields) {
   return (await putSlots([fields]))[0];
 }
@@ -166,20 +170,20 @@ export async function putSlots(list) {
   for (const slot of slots) {
     assertValid(validateSlot(slot), '枠');
     assertKnownRecipe(state, slot.recipe_id);
-    const key = slotKey(slot.date, slot.meal);
+    const key = slotKey(slot.date, slot.meal, slot.part);
     if (keys.has(key)) throw new StorageError(`同じ枠が 2 回指定されています: ${key}`);
     keys.add(key);
   }
 
-  const kept = state.slots.filter((slot) => !keys.has(slotKey(slot.date, slot.meal)));
+  const kept = state.slots.filter((slot) => !keys.has(slotKey(slot.date, slot.meal, slot.part)));
   commit({ ...state, slots: [...kept, ...slots] });
   return clone(slots);
 }
 
-export async function deleteSlot(date, meal) {
+export async function deleteSlot(date, meal, part) {
   const state = requireInit();
-  const key = slotKey(date, meal);
-  const slots = state.slots.filter((slot) => slotKey(slot.date, slot.meal) !== key);
+  const key = slotKey(date, meal, part);
+  const slots = state.slots.filter((slot) => slotKey(slot.date, slot.meal, slot.part) !== key);
   if (slots.length === state.slots.length) return false;
   commit({ ...state, slots });
   return true;
@@ -271,10 +275,11 @@ function writeRaw(serialized) {
   }
 }
 
-const MEAL_ORDER = { breakfast: 0, lunch: 1, dinner: 2 };
-
+// 日付 → 朝昼夕 → パーツ（PARTS の並び）の順。
 function bySlot(a, b) {
-  return a.date.localeCompare(b.date) || MEAL_ORDER[a.meal] - MEAL_ORDER[b.meal];
+  return a.date.localeCompare(b.date)
+    || MEALS.indexOf(a.meal) - MEALS.indexOf(b.meal)
+    || PARTS[a.meal].indexOf(a.part) - PARTS[b.meal].indexOf(b.part);
 }
 
 // 検証エラーは数が多くなりうる。画面に出せる量に絞る。

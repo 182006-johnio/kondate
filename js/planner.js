@@ -4,14 +4,17 @@
 // テストでは固定の乱数列を渡し、結果を再現できるようにする。
 //
 // 候補の絞り込み（CLAUDE.md「提案ロジック」）:
-//   1. その食事 (meals) に使えるレシピ
-//   2. 同じ週の昼・夕で、まだ使っていない
-//   3. 同じ日の昼と夕で protein が重ならない
-//   4. 夕食は、前日と翌日の夕食と protein が重ならない
-// 候補が無ければ 4 → 3 → 2 の順に条件を外す。1 も満たせないときだけ未提案（null）にする。
+//   0. その枠の meal と part に合うレシピ（fitsSlot）
+//   1. 同じ週の昼・夕で、まだ使っていない
+//   2. 同じ日の昼・夕の各パーツと protein が重ならない
+//   3. 夕の protein パーツは、前日と翌日の夕の protein パーツと protein が重ならない
+// 候補が無ければ 3 → 2 → 1 の順に条件を外す。0 も満たせないときだけ未提案（null）にする。
 
 import { addDays, weekDates } from './dates.js';
-import { MEALS, slotKey } from './schema.js';
+import { MEALS, PARTS, fitsSlot, slotKey } from './schema.js';
+
+// 朝食は毎日同じものを出す前提なので、重複・protein の比較に入れない。
+const COMPARED_MEALS = ['lunch', 'dinner'];
 
 // 週の献立をまとめて作る。返すのはその週の枠の配列で、そのまま storage.putSlots に渡せる。
 //
@@ -26,7 +29,7 @@ export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random 
   const decided = new Map();
   for (const slot of slots) {
     if (inWeek.has(slot.date) && !slot.locked) continue;
-    decided.set(slotKey(slot.date, slot.meal), slot);
+    decided.set(keyOf(slot), slot);
   }
 
   const context = { recipes, byId: indexById(recipes), days, random };
@@ -34,21 +37,23 @@ export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random 
 
   for (const date of days) {
     for (const meal of MEALS) {
-      const key = slotKey(date, meal);
-      const current = decided.get(key);
-      if (current) {
-        result.push(current);
-        continue;
+      for (const part of PARTS[meal]) {
+        const key = slotKey(date, meal, part);
+        const current = decided.get(key);
+        if (current) {
+          result.push(current);
+          continue;
+        }
+
+        const recipeId = meal === 'breakfast'
+          ? breakfastRecipeId
+          : pickRecipe({ ...context, date, meal, part, decided, exclude: [] });
+        if (!recipeId) continue;
+
+        const slot = { date, meal, part, recipe_id: recipeId, locked: false };
+        decided.set(key, slot);
+        result.push(slot);
       }
-
-      const recipeId = meal === 'breakfast'
-        ? breakfastRecipeId
-        : pickRecipe({ ...context, date, meal, decided, exclude: [] });
-      if (!recipeId) continue;
-
-      const slot = { date, meal, recipe_id: recipeId, locked: false };
-      decided.set(key, slot);
-      result.push(slot);
     }
   }
 
@@ -58,17 +63,16 @@ export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random 
 // 1 枠だけ引き直す。今のレシピは避けるが、他に候補が無ければ今のレシピを返す。
 // slots には週の全枠と前週の日曜・翌週の月曜を含めて渡す。
 // 返すのは新しい枠（固定なし）。候補が 1 件も無いときは null。
-export function rerollSlot({ date, meal, recipes, slots, random }) {
-  const key = slotKey(date, meal);
+export function rerollSlot({ date, meal, part, recipes, slots, random }) {
+  const key = slotKey(date, meal, part);
   const decided = new Map();
   let currentId = null;
   for (const slot of slots) {
-    const slotK = slotKey(slot.date, slot.meal);
-    if (slotK === key) {
+    if (keyOf(slot) === key) {
       currentId = slot.recipe_id;
       continue;
     }
-    decided.set(slotK, slot);
+    decided.set(keyOf(slot), slot);
   }
 
   const recipeId = pickRecipe({
@@ -78,26 +82,28 @@ export function rerollSlot({ date, meal, recipes, slots, random }) {
     random,
     date,
     meal,
+    part,
     decided,
     exclude: currentId ? [currentId] : [],
   });
-  return recipeId ? { date, meal, recipe_id: recipeId, locked: false } : null;
+  return recipeId ? { date, meal, part, recipe_id: recipeId, locked: false } : null;
 }
 
 // --- 内部 -------------------------------------------------------------
 
-function pickRecipe({ recipes, byId, days, random, date, meal, decided, exclude }) {
-  let pool = recipes.filter((recipe) => recipe.meals.includes(meal) && !exclude.includes(recipe.id));
+function pickRecipe({ recipes, byId, days, random, date, meal, part, decided, exclude }) {
+  const fitting = recipes.filter((recipe) => fitsSlot(recipe, meal, part));
+  let pool = fitting.filter((recipe) => !exclude.includes(recipe.id));
   // 避けたいレシピしか無いなら、それでも空にするよりはよい。
-  if (pool.length === 0) pool = recipes.filter((recipe) => recipe.meals.includes(meal));
+  if (pool.length === 0) pool = fitting;
   if (pool.length === 0) return null;
 
   const used = usedInWeek(decided, days);
-  const sameDay = proteinsOf(byId, [decided.get(slotKey(date, otherMeal(meal)))]);
-  const neighbors = meal === 'dinner'
+  const sameDay = proteinsOf(byId, slotsOfDay(decided, date));
+  const neighbors = part === 'protein'
     ? proteinsOf(byId, [
-      decided.get(slotKey(addDays(date, -1), 'dinner')),
-      decided.get(slotKey(addDays(date, 1), 'dinner')),
+      decided.get(slotKey(addDays(date, -1), 'dinner', 'protein')),
+      decided.get(slotKey(addDays(date, 1), 'dinner', 'protein')),
     ])
     : new Set();
 
@@ -116,16 +122,25 @@ function pickRecipe({ recipes, byId, days, random, date, meal, decided, exclude 
   return null; // pool が空でない限りここには来ない（count = 0 で必ず候補がある）
 }
 
-// 週の中の昼・夕で使っているレシピ。朝食は毎日同じものを出す前提なので数えない。
+// 週の中の昼・夕で使っているレシピ。
 function usedInWeek(decided, days) {
   const used = new Set();
   for (const date of days) {
-    for (const meal of ['lunch', 'dinner']) {
-      const slot = decided.get(slotKey(date, meal));
-      if (slot) used.add(slot.recipe_id);
-    }
+    for (const slot of slotsOfDay(decided, date)) used.add(slot.recipe_id);
   }
   return used;
+}
+
+// その日の昼・夕の決まっている枠。
+function slotsOfDay(decided, date) {
+  const slots = [];
+  for (const meal of COMPARED_MEALS) {
+    for (const part of PARTS[meal]) {
+      const slot = decided.get(slotKey(date, meal, part));
+      if (slot) slots.push(slot);
+    }
+  }
+  return slots;
 }
 
 // 枠のレシピの protein を集める。none と、レシピ集から消えたレシピは比較に使わない。
@@ -138,11 +153,8 @@ function proteinsOf(byId, slots) {
   return proteins;
 }
 
-// 同じ日の比べる相手。朝食は昼・夕のどちらとも比べない。
-function otherMeal(meal) {
-  if (meal === 'lunch') return 'dinner';
-  if (meal === 'dinner') return 'lunch';
-  return null;
+function keyOf(slot) {
+  return slotKey(slot.date, slot.meal, slot.part);
 }
 
 function indexById(recipes) {

@@ -11,9 +11,28 @@ import { isValidISO } from './dates.js';
 export const SCHEMA_VERSION = 1;
 
 export const MEALS = ['breakfast', 'lunch', 'dinner'];
+export const KINDS = ['dish', 'dressing', 'protein', 'rice_side', 'noodle'];
 export const SOURCES = ['dlab', 'arrange', 'external', 'mine'];
 export const PROTEINS = ['chicken', 'pork', 'beef', 'fish', 'egg', 'soy', 'none'];
+export const METHODS = ['sous_vide', 'pot', 'microwave', 'rice_cooker', 'sear', 'none'];
 
+// 食事ごとのパーツ。並びは 1 日の中で選ぶ順（CLAUDE.md「提案ロジック」）でもある。
+// 夕食のサラダ（キャベツ半玉）と炭水化物 270g は毎日の前提なので枠にしない。
+export const PARTS = {
+  breakfast: ['dish'],
+  lunch: ['dish'],
+  dinner: ['protein', 'carb', 'dressing'],
+};
+
+// パーツに入れられるレシピの kind。
+export const KINDS_FOR_PART = {
+  dish: ['dish'],
+  dressing: ['dressing'],
+  protein: ['protein'],
+  carb: ['rice_side', 'noodle'],
+};
+
+const DISH_MEALS = ['breakfast', 'lunch'];
 const NAME_MAX = 80;
 
 export function createDB() {
@@ -37,22 +56,31 @@ export function createRecipe(fields) {
 // 文字列の前後空白を落とし、省略された項目を既定値で埋める。
 // 型が違う値は加工せずそのまま残し、判断を検証側に渡す。黙って直すと不正な入力が通る。
 export function normalizeRecipe(fields) {
+  const kind = fields.kind ?? 'dish';
   return {
     id: fields.id,
     name: trimText(fields.name),
-    meals: Array.isArray(fields.meals) ? [...new Set(fields.meals)] : fields.meals,
+    kind,
+    // 夕食のパーツは夕食にしか使わないので、入力を待たずに決める。
+    meals: kind !== 'dish' && KINDS.includes(kind) ? ['dinner'] : normalizeMeals(fields.meals),
     source: fields.source ?? 'mine',
     url: optionalText(fields.url),
     protein: fields.protein ?? 'none',
-    ingredients: normalizeIngredients(fields.ingredients),
+    method: fields.method ?? 'none',
+    ingredients: normalizeItems(fields.ingredients),
+    seasonings: normalizeItems(fields.seasonings),
     steps: normalizeSteps(fields.steps),
     minutes: fields.minutes === undefined || fields.minutes === '' ? null : fields.minutes,
     note: optionalText(fields.note),
   };
 }
 
+function normalizeMeals(values) {
+  return Array.isArray(values) ? [...new Set(values)] : values;
+}
+
 // 名前が空の行は入力途中の空行とみなして落とす。
-function normalizeIngredients(values) {
+function normalizeItems(values) {
   if (values === undefined || values === null) return [];
   if (!Array.isArray(values)) return values;
   return values
@@ -68,8 +96,8 @@ function normalizeSteps(values) {
   return values.map(trimText).filter((step) => step !== '');
 }
 
-export function createSlot({ date, meal, recipe_id, locked = false }) {
-  return { date, meal, recipe_id, locked };
+export function createSlot({ date, meal, part, recipe_id, locked = false }) {
+  return { date, meal, part, recipe_id, locked };
 }
 
 // --- 検証 -------------------------------------------------------------
@@ -83,26 +111,35 @@ export function validateRecipe(recipe) {
   if (!isNonEmptyString(recipe.name)) errors.push(`${label}: name が空です`);
   else if (recipe.name.length > NAME_MAX) errors.push(`${label}: name が ${NAME_MAX} 文字を超えています`);
 
-  if (!Array.isArray(recipe.meals) || recipe.meals.length === 0) {
-    errors.push(`${label}: meals を 1 つ以上指定してください`);
-  } else if (!recipe.meals.every((meal) => MEALS.includes(meal))) {
-    errors.push(`${label}: meals に不明な値があります: ${recipe.meals.join(', ')}`);
+  if (!KINDS.includes(recipe.kind)) {
+    errors.push(`${label}: kind が不正です: ${String(recipe.kind)}`);
+  } else if (recipe.kind === 'dish') {
+    if (!Array.isArray(recipe.meals) || recipe.meals.length === 0
+      || !recipe.meals.every((meal) => DISH_MEALS.includes(meal))) {
+      errors.push(`${label}: 一品料理の meals は breakfast / lunch の 1 つ以上にしてください`);
+    }
+  } else if (!(Array.isArray(recipe.meals) && recipe.meals.length === 1 && recipe.meals[0] === 'dinner')) {
+    errors.push(`${label}: 夕食のパーツの meals は ['dinner'] です`);
   }
 
   if (!SOURCES.includes(recipe.source)) errors.push(`${label}: source が不正です: ${String(recipe.source)}`);
   if (!PROTEINS.includes(recipe.protein)) errors.push(`${label}: protein が不正です: ${String(recipe.protein)}`);
+  if (!METHODS.includes(recipe.method)) errors.push(`${label}: method が不正です: ${String(recipe.method)}`);
 
   if (typeof recipe.url !== 'string') errors.push(`${label}: url が文字列ではありません`);
   else if (recipe.url !== '' && !/^https?:\/\//.test(recipe.url)) {
     errors.push(`${label}: url は http(s) で始めてください`);
   }
 
-  if (!Array.isArray(recipe.ingredients)) {
-    errors.push(`${label}: ingredients が配列ではありません`);
-  } else if (!recipe.ingredients.every(
-    (item) => isPlainObject(item) && isNonEmptyString(item.name) && typeof item.amount === 'string',
-  )) {
-    errors.push(`${label}: ingredients の各要素は { name, amount } の文字列にしてください`);
+  for (const field of ['ingredients', 'seasonings']) {
+    const items = recipe[field];
+    if (!Array.isArray(items)) {
+      errors.push(`${label}: ${field} が配列ではありません`);
+    } else if (!items.every(
+      (item) => isPlainObject(item) && isNonEmptyString(item.name) && typeof item.amount === 'string',
+    )) {
+      errors.push(`${label}: ${field} の各要素は { name, amount } の文字列にしてください`);
+    }
   }
 
   if (!Array.isArray(recipe.steps) || !recipe.steps.every(isNonEmptyString)) {
@@ -120,10 +157,11 @@ export function validateRecipe(recipe) {
 export function validateSlot(slot) {
   const errors = [];
   if (!isPlainObject(slot)) return result(['枠がオブジェクトではありません']);
-  const label = `枠 ${String(slot.date)} ${String(slot.meal)}`;
+  const label = `枠 ${slotKey(slot.date, slot.meal, slot.part)}`;
 
   if (!isValidISO(slot.date)) errors.push(`${label}: date が YYYY-MM-DD ではありません`);
   if (!MEALS.includes(slot.meal)) errors.push(`${label}: meal が不正です`);
+  else if (!PARTS[slot.meal].includes(slot.part)) errors.push(`${label}: part がこの食事に合いません`);
   if (!isNonEmptyString(slot.recipe_id)) errors.push(`${label}: recipe_id が空です`);
   if (typeof slot.locked !== 'boolean') errors.push(`${label}: locked が真偽値ではありません`);
   return result(errors);
@@ -162,16 +200,21 @@ export function validateDB(db) {
   const slotKeys = new Set();
   for (const slot of db.slots) {
     errors.push(...validateSlot(slot).errors);
-    const key = slotKey(slot?.date, slot?.meal);
-    if (slotKeys.has(key)) errors.push(`枠 ${key}: (date, meal) が重複しています`);
+    const key = slotKey(slot?.date, slot?.meal, slot?.part);
+    if (slotKeys.has(key)) errors.push(`枠 ${key}: (date, meal, part) が重複しています`);
     slotKeys.add(key);
   }
 
   return result(errors);
 }
 
-export function slotKey(date, meal) {
-  return `${date} ${meal}`;
+export function slotKey(date, meal, part) {
+  return `${date} ${meal} ${part}`;
+}
+
+// そのレシピをその枠に入れられるか。提案ロジックと UI の候補一覧が使う。
+export function fitsSlot(recipe, meal, part) {
+  return recipe.meals.includes(meal) && (KINDS_FOR_PART[part] ?? []).includes(recipe.kind);
 }
 
 // --- 内部 -------------------------------------------------------------

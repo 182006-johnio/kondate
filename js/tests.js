@@ -41,30 +41,37 @@ async function freshStore() {
   await storage.init({ key: TEST_KEY });
 }
 
+// 既定は夕食の protein パーツ（サラダに載せるたんぱく質）。
 function makeRecipe(overrides = {}) {
-  return {
+  return schema.normalizeRecipe({
     id: 'arrange-001',
-    name: '鶏むね肉の塩レモン焼き',
-    meals: ['lunch', 'dinner'],
+    name: '低温調理の鶏むね肉',
+    kind: 'protein',
     source: 'arrange',
-    url: '',
     protein: 'chicken',
+    method: 'sous_vide',
     ingredients: [{ name: '鶏むね肉', amount: '1枚' }],
-    steps: ['焼く'],
-    minutes: 20,
-    note: '',
+    seasonings: [{ name: '塩', amount: '肉の重さの1%' }],
+    steps: ['塩をすり込み、63℃で1時間40分低温調理する'],
+    minutes: 5,
     ...overrides,
-  };
+  });
 }
 
 const BREAKFAST = {
   name: 'オートミールとゆで卵',
+  kind: 'dish',
   meals: ['breakfast'],
   protein: 'egg',
+  method: 'microwave',
   ingredients: [{ name: 'オートミール', amount: '30g' }, { name: '卵', amount: '2個' }],
-  steps: ['卵をゆでる', 'オートミールに牛乳をかける'],
+  steps: ['卵をゆでる', 'オートミールに牛乳をかけてレンジで温める'],
   minutes: 10,
 };
+
+function slot(date, meal, part, recipe_id, locked = false) {
+  return { date, meal, part, recipe_id, locked };
+}
 
 // --- dates ------------------------------------------------------------
 
@@ -108,39 +115,73 @@ test('formatDayLabel', () => {
 // --- schema -----------------------------------------------------------
 
 test('validateRecipe は正しいレシピを通す', () => {
-  assertEqual(schema.validateRecipe(makeRecipe()).errors, [], 'エラー');
+  assertEqual(schema.validateRecipe(makeRecipe()).errors, [], 'protein');
+  assertEqual(schema.validateRecipe(makeRecipe({ kind: 'dish', meals: ['lunch'] })).errors, [], 'dish');
 });
 
 test('validateRecipe は必須項目と列挙値の誤りを拾う', () => {
   const cases = [
-    makeRecipe({ name: '  ' }),
-    makeRecipe({ meals: [] }),
-    makeRecipe({ meals: ['snack'] }),
-    makeRecipe({ source: 'web' }),
-    makeRecipe({ protein: 'lamb' }),
-    makeRecipe({ url: 'javascript:alert(1)' }),
-    makeRecipe({ ingredients: [{ name: '', amount: '' }] }),
-    makeRecipe({ steps: [''] }),
-    makeRecipe({ minutes: -1 }),
+    { ...makeRecipe(), name: '  ' },
+    { ...makeRecipe(), kind: 'soup' },
+    { ...makeRecipe(), kind: 'dish', meals: [] },
+    { ...makeRecipe(), kind: 'dish', meals: ['dinner'] },
+    { ...makeRecipe(), kind: 'protein', meals: ['lunch'] },
+    { ...makeRecipe(), source: 'web' },
+    { ...makeRecipe(), protein: 'lamb' },
+    { ...makeRecipe(), method: 'fry' },
+    { ...makeRecipe(), url: 'javascript:alert(1)' },
+    { ...makeRecipe(), ingredients: [{ name: '', amount: '' }] },
+    { ...makeRecipe(), seasonings: ['塩'] },
+    { ...makeRecipe(), steps: [''] },
+    { ...makeRecipe(), minutes: -1 },
   ];
   cases.forEach((recipe, index) => {
     assert(!schema.validateRecipe(recipe).ok, `${index} 番目が通ってしまった`);
   });
 });
 
-test('normalizeRecipe は空白を落とし、空の材料行と手順を除く', () => {
+test('normalizeRecipe は空白を落とし、空の行を除き、既定値で埋める', () => {
   const recipe = schema.normalizeRecipe({
     id: 'x',
     name: '  納豆ごはん ',
     meals: ['breakfast', 'breakfast'],
     ingredients: [{ name: ' 納豆 ', amount: ' 1パック ' }, { name: '', amount: '' }],
+    seasonings: [{ name: ' 醤油 ' }],
     steps: [' 混ぜる ', '  '],
   });
   assertEqual(recipe.name, '納豆ごはん', '名前');
   assertEqual(recipe.meals, ['breakfast'], '食事の重複');
-  assertEqual(recipe.ingredients, [{ name: '納豆', amount: '1パック' }], '材料');
+  assertEqual(recipe.ingredients, [{ name: '納豆', amount: '1パック' }], '食材');
+  assertEqual(recipe.seasonings, [{ name: '醤油', amount: '' }], '調味料');
   assertEqual(recipe.steps, ['混ぜる'], '手順');
-  assertEqual([recipe.source, recipe.protein, recipe.minutes, recipe.url], ['mine', 'none', null, ''], '既定値');
+  assertEqual(
+    [recipe.kind, recipe.source, recipe.protein, recipe.method, recipe.minutes, recipe.url],
+    ['dish', 'mine', 'none', 'none', null, ''],
+    '既定値',
+  );
+});
+
+test('normalizeRecipe は夕食のパーツの meals を dinner に決める', () => {
+  for (const kind of ['dressing', 'protein', 'rice_side', 'noodle']) {
+    assertEqual(schema.normalizeRecipe({ id: 'x', name: 'a', kind, meals: ['lunch'] }).meals, ['dinner'], kind);
+  }
+});
+
+test('fitsSlot は meal と part に合う kind だけを通す', () => {
+  const dish = makeRecipe({ kind: 'dish', meals: ['lunch'] });
+  const riceSide = makeRecipe({ kind: 'rice_side' });
+  const noodle = makeRecipe({ kind: 'noodle' });
+  assert(schema.fitsSlot(dish, 'lunch', 'dish'), '昼の一品');
+  assert(!schema.fitsSlot(dish, 'breakfast', 'dish'), '朝に使えない一品');
+  assert(schema.fitsSlot(riceSide, 'dinner', 'carb'), 'ご飯のおかずは carb');
+  assert(schema.fitsSlot(noodle, 'dinner', 'carb'), '具入り麺は carb');
+  assert(!schema.fitsSlot(noodle, 'dinner', 'protein'), '麺は protein に入らない');
+});
+
+test('validateSlot は食事に合わない part を拾う', () => {
+  assert(schema.validateSlot(slot('2026-10-19', 'dinner', 'carb', 'a')).ok, '夕の carb');
+  assert(!schema.validateSlot(slot('2026-10-19', 'lunch', 'carb', 'a')).ok, '昼の carb');
+  assert(!schema.validateSlot(slot('2026-10-19', 'dinner', 'dish', 'a')).ok, '夕の dish');
 });
 
 test('validateDB は空の DB を通す', () => {
@@ -149,8 +190,7 @@ test('validateDB は空の DB を通す', () => {
 
 test('validateDB は枠の重複を拾う', () => {
   const db = schema.createDB();
-  const slot = { date: '2026-10-19', meal: 'lunch', recipe_id: 'arrange-001', locked: false };
-  db.slots = [slot, { ...slot }];
+  db.slots = [slot('2026-10-19', 'lunch', 'dish', 'a'), slot('2026-10-19', 'lunch', 'dish', 'b')];
   assert(!schema.validateDB(db).ok, '重複が通ってしまった');
 });
 
@@ -188,6 +228,7 @@ test('addRecipe は UUID と source=mine を付けて保存し、再読み込み
 test('addRecipe は不正なレシピを保存しない', async () => {
   await freshStore();
   await assertThrows(() => storage.addRecipe({ ...BREAKFAST, meals: [] }), 'meals が空');
+  await assertThrows(() => storage.addRecipe({ ...BREAKFAST, method: 'fry' }), '不明な method');
   assertEqual((await storage.getCounts()).recipes, 0, '件数');
 });
 
@@ -200,6 +241,13 @@ test('updateRecipe は許可した項目だけ更新する', async () => {
   await assertThrows(() => storage.updateRecipe(added.id, { id: 'x' }), 'id は更新できない');
 });
 
+test('updateRecipe で kind を夕食のパーツに変えると meals が dinner になる', async () => {
+  await freshStore();
+  const added = await storage.addRecipe(BREAKFAST);
+  const updated = await storage.updateRecipe(added.id, { kind: 'dressing' });
+  assertEqual(updated.meals, ['dinner'], 'meals');
+});
+
 test('getMyRecipe はコピーを返す（書き換えても保存に影響しない）', async () => {
   await freshStore();
   const added = await storage.addRecipe(BREAKFAST);
@@ -208,23 +256,27 @@ test('getMyRecipe はコピーを返す（書き換えても保存に影響し�
   assertEqual((await storage.getMyRecipe(added.id)).name, BREAKFAST.name, '名前');
 });
 
-test('putSlot は (date, meal) が同じなら置き換える', async () => {
+test('putSlot は (date, meal, part) が同じなら置き換え、part が違えば別の枠にする', async () => {
   await freshStore();
-  await storage.putSlot({ date: '2026-10-19', meal: 'lunch', recipe_id: 'arrange-001' });
-  await storage.putSlot({ date: '2026-10-19', meal: 'lunch', recipe_id: 'arrange-002', locked: true });
+  await storage.putSlot(slot('2026-10-19', 'dinner', 'protein', 'a'));
+  await storage.putSlot(slot('2026-10-19', 'dinner', 'protein', 'b', true));
+  await storage.putSlot(slot('2026-10-19', 'dinner', 'carb', 'c'));
   const slots = await storage.getSlots('2026-10-19', '2026-10-19');
-  assertEqual(slots, [{ date: '2026-10-19', meal: 'lunch', recipe_id: 'arrange-002', locked: true }], '枠');
+  assertEqual(slots, [
+    slot('2026-10-19', 'dinner', 'protein', 'b', true),
+    slot('2026-10-19', 'dinner', 'carb', 'c'),
+  ], '枠');
 });
 
 test('putSlots は 1 件でも不正なら何も書かない', async () => {
   await freshStore();
   await assertThrows(() => storage.putSlots([
-    { date: '2026-10-19', meal: 'lunch', recipe_id: 'arrange-001' },
-    { date: '2026-10-19', meal: 'snack', recipe_id: 'arrange-002' },
-  ]), '不正な meal');
+    slot('2026-10-19', 'lunch', 'dish', 'a'),
+    slot('2026-10-19', 'lunch', 'carb', 'b'),
+  ]), '食事に合わない part');
   await assertThrows(() => storage.putSlots([
-    { date: '2026-10-19', meal: 'lunch', recipe_id: 'arrange-001' },
-    { date: '2026-10-19', meal: 'lunch', recipe_id: 'arrange-002' },
+    slot('2026-10-19', 'lunch', 'dish', 'a'),
+    slot('2026-10-19', 'lunch', 'dish', 'b'),
   ]), '同じ枠が 2 回');
   assertEqual((await storage.getCounts()).slots, 0, '件数');
 });
@@ -232,28 +284,29 @@ test('putSlots は 1 件でも不正なら何も書かない', async () => {
 test('putSlot は存在しない自分のレシピを指せない', async () => {
   await freshStore();
   await assertThrows(
-    () => storage.putSlot({ date: '2026-10-19', meal: 'breakfast', recipe_id: crypto.randomUUID() }),
+    () => storage.putSlot(slot('2026-10-19', 'breakfast', 'dish', crypto.randomUUID())),
     '存在しない UUID',
   );
 });
 
-test('getSlots は期間内を日付・朝昼夜の順で返す', async () => {
+test('getSlots は期間内を日付・朝昼夕・パーツの順で返す', async () => {
   await freshStore();
   await storage.putSlots([
-    { date: '2026-10-20', meal: 'breakfast', recipe_id: 'a' },
-    { date: '2026-10-19', meal: 'dinner', recipe_id: 'b' },
-    { date: '2026-10-19', meal: 'breakfast', recipe_id: 'c' },
-    { date: '2026-10-26', meal: 'lunch', recipe_id: 'd' },
+    slot('2026-10-20', 'breakfast', 'dish', 'a'),
+    slot('2026-10-19', 'dinner', 'dressing', 'b'),
+    slot('2026-10-19', 'dinner', 'protein', 'c'),
+    slot('2026-10-19', 'breakfast', 'dish', 'd'),
+    slot('2026-10-26', 'lunch', 'dish', 'e'),
   ]);
   const slots = await storage.getSlots('2026-10-19', '2026-10-25');
-  assertEqual(slots.map((slot) => slot.recipe_id), ['c', 'b', 'a'], '順序');
+  assertEqual(slots.map((item) => item.recipe_id), ['d', 'c', 'b', 'a'], '順序');
 });
 
 test('deleteSlot は枠を消して未提案に戻す', async () => {
   await freshStore();
-  await storage.putSlot({ date: '2026-10-19', meal: 'lunch', recipe_id: 'a' });
-  assert(await storage.deleteSlot('2026-10-19', 'lunch'), '消せた');
-  assert(!(await storage.deleteSlot('2026-10-19', 'lunch')), '2 回目は false');
+  await storage.putSlot(slot('2026-10-19', 'dinner', 'carb', 'a'));
+  assert(await storage.deleteSlot('2026-10-19', 'dinner', 'carb'), '消せた');
+  assert(!(await storage.deleteSlot('2026-10-19', 'dinner', 'carb')), '2 回目は false');
   assertEqual((await storage.getCounts()).slots, 0, '件数');
 });
 
@@ -274,13 +327,13 @@ test('deleteRecipe はそのレシピの枠と朝食設定も消す', async () =
   const added = await storage.addRecipe(BREAKFAST);
   await storage.updateSettings({ breakfast_recipe_id: added.id });
   await storage.putSlots([
-    { date: '2026-10-19', meal: 'breakfast', recipe_id: added.id },
-    { date: '2026-10-19', meal: 'lunch', recipe_id: 'arrange-001' },
+    slot('2026-10-19', 'breakfast', 'dish', added.id),
+    slot('2026-10-19', 'lunch', 'dish', 'arrange-001'),
   ]);
 
   assert(await storage.deleteRecipe(added.id), '消せた');
   const slots = await storage.getSlots('2026-10-19', '2026-10-19');
-  assertEqual(slots.map((slot) => slot.recipe_id), ['arrange-001'], '同梱レシピの枠は残る');
+  assertEqual(slots.map((item) => item.recipe_id), ['arrange-001'], '同梱レシピの枠は残る');
   assertEqual((await storage.getSettings()).breakfast_recipe_id, null, '朝食設定');
 });
 
@@ -288,6 +341,7 @@ test('deleteRecipe はそのレシピの枠と朝食設定も消す', async () =
 
 const WEEK = '2026-10-19'; // 月曜
 const PREV_SUNDAY = '2026-10-18';
+const PROTEINS = ['chicken', 'pork', 'beef', 'fish', 'egg', 'soy'];
 
 // 再現できる乱数列（mulberry32）。同じ seed なら毎回同じ献立になる。
 function seeded(seed) {
@@ -301,195 +355,217 @@ function seeded(seed) {
   };
 }
 
-// 昼・夕どちらにも使えるレシピを、protein ごとに count 件ずつ作る。
+// 昼の一品・夕の protein・夕の carb（ご飯のおかずと麺を交互）を protein ごとに count 件、
+// ドレッシングを 8 件作る。
 function variedRecipes(count = 4) {
-  const proteins = ['chicken', 'pork', 'beef', 'fish', 'egg', 'soy'];
-  return proteins.flatMap((protein) => Array.from({ length: count }, (_, index) => makeRecipe({
-    id: `${protein}-${index}`,
-    name: `${protein} ${index}`,
-    protein,
-  })));
+  const recipes = [];
+  for (const protein of PROTEINS) {
+    for (let index = 0; index < count; index += 1) {
+      recipes.push(
+        makeRecipe({ id: `dish-${protein}-${index}`, kind: 'dish', meals: ['lunch'], protein }),
+        makeRecipe({ id: `protein-${protein}-${index}`, kind: 'protein', protein }),
+        makeRecipe({ id: `carb-${protein}-${index}`, kind: index % 2 === 0 ? 'rice_side' : 'noodle', protein }),
+      );
+    }
+  }
+  for (let index = 0; index < 8; index += 1) {
+    recipes.push(makeRecipe({ id: `dressing-${index}`, kind: 'dressing', protein: 'none' }));
+  }
+  return recipes;
 }
 
-const BREAKFAST_RECIPE = makeRecipe({ id: 'mine-breakfast', meals: ['breakfast'], protein: 'egg', source: 'mine' });
+const BREAKFAST_RECIPE = makeRecipe({
+  id: 'mine-breakfast', kind: 'dish', meals: ['breakfast'], protein: 'egg', source: 'mine',
+});
+
+function run(options) {
+  return planner.planWeek({ weekStart: WEEK, slots: [], breakfastRecipeId: null, ...options });
+}
 
 function byKey(slots) {
-  return new Map(slots.map((slot) => [schema.slotKey(slot.date, slot.meal), slot]));
+  return new Map(slots.map((item) => [schema.slotKey(item.date, item.meal, item.part), item]));
 }
 
-// 提案ルール 2〜4 を満たしているかを確かめる。違反を文字列の配列で返す。
+// 提案ルール 1〜3 を満たしているかを確かめる。違反を文字列の配列で返す。
 function ruleViolations(slots, recipes) {
   const protein = new Map(recipes.map((recipe) => [recipe.id, recipe.protein]));
   const map = byKey(slots);
   const violations = [];
   const days = dates.weekDates(WEEK);
+  const daySlots = (date) => [
+    map.get(schema.slotKey(date, 'lunch', 'dish')),
+    ...schema.PARTS.dinner.map((part) => map.get(schema.slotKey(date, 'dinner', part))),
+  ].filter(Boolean);
 
-  const ids = days.flatMap((date) => ['lunch', 'dinner']
-    .map((meal) => map.get(schema.slotKey(date, meal))?.recipe_id)
-    .filter(Boolean));
+  const ids = days.flatMap((date) => daySlots(date).map((item) => item.recipe_id));
   if (new Set(ids).size !== ids.length) violations.push('同じ週に同じレシピ');
 
   for (const date of days) {
-    const lunch = protein.get(map.get(schema.slotKey(date, 'lunch'))?.recipe_id);
-    const dinner = protein.get(map.get(schema.slotKey(date, 'dinner'))?.recipe_id);
-    if (lunch && lunch !== 'none' && lunch === dinner) violations.push(`${date} 昼と夕が ${lunch}`);
+    const proteins = daySlots(date)
+      .map((item) => protein.get(item.recipe_id))
+      .filter((value) => value && value !== 'none');
+    if (new Set(proteins).size !== proteins.length) violations.push(`${date} 同じ日に protein が重複: ${proteins}`);
 
-    const before = protein.get(map.get(schema.slotKey(dates.addDays(date, -1), 'dinner'))?.recipe_id);
-    if (dinner && dinner !== 'none' && dinner === before) violations.push(`${date} 前日の夕食と ${dinner}`);
+    const today = protein.get(map.get(schema.slotKey(date, 'dinner', 'protein'))?.recipe_id);
+    const before = protein.get(map.get(schema.slotKey(dates.addDays(date, -1), 'dinner', 'protein'))?.recipe_id);
+    if (today && today !== 'none' && today === before) violations.push(`${date} 前日の夕食と ${today}`);
   }
   return violations;
 }
 
-test('planWeek は朝食を固定し、昼・夕を 7 日分埋める', () => {
+test('planWeek は朝食を固定し、昼の一品と夕の 3 パーツを 7 日分埋める', () => {
   const recipes = [BREAKFAST_RECIPE, ...variedRecipes()];
-  const slots = planner.planWeek({
-    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: BREAKFAST_RECIPE.id, random: seeded(1),
-  });
-  assertEqual(slots.length, 21, '枠の数');
-  assert(slots.filter((slot) => slot.meal === 'breakfast').every((slot) => slot.recipe_id === BREAKFAST_RECIPE.id), '朝食');
-  assert(slots.every((slot) => slot.locked === false), '新しい枠は固定しない');
-  assert(slots.every((slot) => schema.validateSlot(slot).ok), '枠として正しい');
+  const slots = run({ recipes, breakfastRecipeId: BREAKFAST_RECIPE.id, random: seeded(1) });
+  assertEqual(slots.length, 7 * 5, '枠の数');
+  for (const item of slots) {
+    const recipe = recipes.find((candidate) => candidate.id === item.recipe_id);
+    assert(schema.fitsSlot(recipe, item.meal, item.part), `${item.meal} ${item.part} に ${recipe.kind}`);
+    assert(schema.validateSlot(item).ok, '枠として正しい');
+    assert(item.locked === false, '新しい枠は固定しない');
+  }
+  assert(slots.filter((item) => item.meal === 'breakfast').every((item) => item.recipe_id === BREAKFAST_RECIPE.id), '朝食');
 });
 
 test('planWeek は候補が十分あればルールを破らない（seed を変えて 50 回）', () => {
   const recipes = [BREAKFAST_RECIPE, ...variedRecipes()];
+  const previous = slot(PREV_SUNDAY, 'dinner', 'protein', 'protein-fish-0');
   for (let seed = 1; seed <= 50; seed += 1) {
-    const previous = { date: PREV_SUNDAY, meal: 'dinner', recipe_id: 'fish-0', locked: false };
-    const slots = planner.planWeek({
-      weekStart: WEEK, recipes, slots: [previous], breakfastRecipeId: null, random: seeded(seed),
-    });
-    const violations = ruleViolations([previous, ...slots], recipes);
-    assertEqual(violations, [], `seed ${seed}`);
+    const slots = run({ recipes, slots: [previous], random: seeded(seed) });
+    assertEqual(ruleViolations([previous, ...slots], recipes), [], `seed ${seed}`);
   }
 });
 
-test('planWeek は前週の日曜の夕食を返さず、月曜の夕食と比べるだけにする', () => {
-  // 夕食に使えるのは fish と chicken だけ。前週日曜が fish なら月曜は chicken になる。
+test('planWeek は carb にご飯のおかずと麺の両方を使う', () => {
+  const slots = run({ recipes: variedRecipes(), random: seeded(5) });
+  const recipes = variedRecipes();
+  const kinds = new Set(slots
+    .filter((item) => item.part === 'carb')
+    .map((item) => recipes.find((recipe) => recipe.id === item.recipe_id).kind));
+  assertEqual([...kinds].sort(), ['noodle', 'rice_side'], 'kind');
+});
+
+test('planWeek は前週の日曜の夕食を返さず、月曜の protein と比べるだけにする', () => {
+  // protein パーツは fish と chicken だけ。前週日曜が fish なら月曜は chicken になる。
   const recipes = [
-    makeRecipe({ id: 'lunch-none', meals: ['lunch'], protein: 'none' }),
-    makeRecipe({ id: 'fish-a', meals: ['dinner'], protein: 'fish' }),
-    makeRecipe({ id: 'chicken-a', meals: ['dinner'], protein: 'chicken' }),
+    makeRecipe({ id: 'fish-a', protein: 'fish' }),
+    makeRecipe({ id: 'chicken-a', protein: 'chicken' }),
   ];
-  const previous = { date: PREV_SUNDAY, meal: 'dinner', recipe_id: 'fish-a', locked: false };
+  const previous = slot(PREV_SUNDAY, 'dinner', 'protein', 'fish-a');
   for (let seed = 1; seed <= 20; seed += 1) {
-    const slots = planner.planWeek({
-      weekStart: WEEK, recipes, slots: [previous], breakfastRecipeId: null, random: seeded(seed),
-    });
-    assert(slots.every((slot) => slot.date >= WEEK), '週の外の枠を返した');
-    assertEqual(byKey(slots).get(`${WEEK} dinner`).recipe_id, 'chicken-a', `seed ${seed} 月曜の夕食`);
+    const slots = run({ recipes, slots: [previous], random: seeded(seed) });
+    assert(slots.every((item) => item.date >= WEEK), '週の外の枠を返した');
+    assertEqual(byKey(slots).get(`${WEEK} dinner protein`).recipe_id, 'chicken-a', `seed ${seed} 月曜`);
   }
 });
 
 test('planWeek は固定枠を残し、そのレシピを他の枠で使わない', () => {
   const recipes = [BREAKFAST_RECIPE, ...variedRecipes()];
   const locked = [
-    { date: '2026-10-21', meal: 'dinner', recipe_id: 'beef-0', locked: true },
-    { date: '2026-10-19', meal: 'breakfast', recipe_id: 'chicken-3', locked: true },
+    slot('2026-10-21', 'dinner', 'protein', 'protein-beef-0', true),
+    slot('2026-10-22', 'dinner', 'dressing', 'dressing-3', true),
+    slot('2026-10-19', 'breakfast', 'dish', 'dish-chicken-3', true),
   ];
   for (let seed = 1; seed <= 20; seed += 1) {
-    const slots = planner.planWeek({
-      weekStart: WEEK, recipes, slots: locked, breakfastRecipeId: BREAKFAST_RECIPE.id, random: seeded(seed),
-    });
+    const slots = run({ recipes, slots: locked, breakfastRecipeId: BREAKFAST_RECIPE.id, random: seeded(seed) });
     const map = byKey(slots);
-    assertEqual(map.get('2026-10-21 dinner'), locked[0], '固定した夕食');
-    assertEqual(map.get('2026-10-19 breakfast'), locked[1], '固定した朝食');
-    const beefUses = slots.filter((slot) => slot.recipe_id === 'beef-0').length;
-    assertEqual(beefUses, 1, `seed ${seed} 固定したレシピの使用回数`);
+    for (const item of locked) {
+      assertEqual(map.get(schema.slotKey(item.date, item.meal, item.part)), item, '固定した枠');
+    }
+    for (const id of ['protein-beef-0', 'dressing-3']) {
+      assertEqual(slots.filter((item) => item.recipe_id === id).length, 1, `seed ${seed} ${id} の使用回数`);
+    }
     assertEqual(ruleViolations(slots, recipes), [], `seed ${seed} 固定枠の前後`);
   }
 });
 
 test('planWeek は固定していない既存の枠を作り直す（使用済みに数えない）', () => {
-  // 昼専用・夕専用が 7 件ずつ。既存の枠を使用済みに数えてしまうと候補が足りず重複が出る。
-  const lunches = Array.from({ length: 7 }, (_, i) => makeRecipe({ id: `l${i}`, meals: ['lunch'], protein: 'none' }));
-  const dinners = Array.from({ length: 7 }, (_, i) => makeRecipe({ id: `d${i}`, meals: ['dinner'], protein: 'none' }));
+  // 昼の一品と各パーツが 7 件ずつ。既存の枠を使用済みに数えてしまうと候補が足りず重複が出る。
+  const make = (kind, prefix, meals) => Array.from({ length: 7 }, (_, i) => makeRecipe({
+    id: `${prefix}${i}`, kind, meals, protein: 'none',
+  }));
+  const recipes = [
+    ...make('dish', 'l', ['lunch']),
+    ...make('protein', 'p', undefined),
+    ...make('rice_side', 'c', undefined),
+    ...make('dressing', 'd', undefined),
+  ];
   const existing = dates.weekDates(WEEK).flatMap((date, i) => [
-    { date, meal: 'lunch', recipe_id: `l${i}`, locked: false },
-    { date, meal: 'dinner', recipe_id: `d${i}`, locked: false },
+    slot(date, 'lunch', 'dish', `l${i}`),
+    slot(date, 'dinner', 'protein', `p${i}`),
+    slot(date, 'dinner', 'carb', `c${i}`),
+    slot(date, 'dinner', 'dressing', `d${i}`),
   ]);
   for (let seed = 1; seed <= 20; seed += 1) {
-    const slots = planner.planWeek({
-      weekStart: WEEK, recipes: [...lunches, ...dinners], slots: existing, breakfastRecipeId: null, random: seeded(seed),
-    });
-    assertEqual(new Set(slots.map((slot) => slot.recipe_id)).size, 14, `seed ${seed} 14 件すべて別のレシピ`);
+    const slots = run({ recipes, slots: existing, random: seeded(seed) });
+    assertEqual(new Set(slots.map((item) => item.recipe_id)).size, 28, `seed ${seed} 28 件すべて別のレシピ`);
   }
 });
 
 test('planWeek は朝食が未設定なら朝食枠を作らない', () => {
-  const slots = planner.planWeek({
-    weekStart: WEEK, recipes: variedRecipes(), slots: [], breakfastRecipeId: null, random: seeded(1),
-  });
-  assert(slots.every((slot) => slot.meal !== 'breakfast'), '朝食枠がある');
-  assertEqual(slots.length, 14, '枠の数');
+  const slots = run({ recipes: variedRecipes(), random: seeded(1) });
+  assert(slots.every((item) => item.meal !== 'breakfast'), '朝食枠がある');
+  assertEqual(slots.length, 7 * 4, '枠の数');
 });
 
 test('planWeek は候補が少なくても条件を緩めて全枠を埋める', () => {
-  // 昼・夕兼用が鶏肉 2 件だけ。重複も protein の重なりも避けられない。
-  const recipes = [makeRecipe({ id: 'c1' }), makeRecipe({ id: 'c2' })];
-  const slots = planner.planWeek({
-    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(3),
-  });
-  assertEqual(slots.length, 14, '枠の数');
+  // 各パーツが鶏肉 2 件だけ。重複も protein の重なりも避けられない。
+  const recipes = ['dish', 'protein', 'noodle', 'dressing'].flatMap((kind) => [1, 2].map((i) => makeRecipe({
+    id: `${kind}-${i}`, kind, meals: kind === 'dish' ? ['lunch'] : undefined,
+  })));
+  assertEqual(run({ recipes, random: seeded(3) }).length, 7 * 4, '枠の数');
 });
 
 test('planWeek は緩めるとき「同じ週で重複しない」を最後まで守る', () => {
-  // 鶏肉だけ 14 件。protein の条件は破るしかないが、重複は避けられる。
-  const recipes = Array.from({ length: 14 }, (_, i) => makeRecipe({ id: `c${i}` }));
+  // protein パーツが鶏肉だけ 7 件。protein の条件は破るしかないが、重複は避けられる。
+  const recipes = Array.from({ length: 7 }, (_, i) => makeRecipe({ id: `c${i}` }));
   for (let seed = 1; seed <= 20; seed += 1) {
-    const slots = planner.planWeek({
-      weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(seed),
-    });
-    assertEqual(new Set(slots.map((slot) => slot.recipe_id)).size, 14, `seed ${seed} 重複`);
+    const slots = run({ recipes, random: seeded(seed) });
+    assertEqual(new Set(slots.map((item) => item.recipe_id)).size, 7, `seed ${seed} 重複`);
   }
 });
 
-test('planWeek は使えるレシピが 0 件の食事を未提案のままにする', () => {
-  const recipes = [makeRecipe({ id: 'lunch-only', meals: ['lunch'] })];
-  const slots = planner.planWeek({
-    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(1),
-  });
-  assert(slots.every((slot) => slot.meal === 'lunch'), '夕食枠がある');
+test('planWeek は使えるレシピが 0 件のパーツを未提案のままにする', () => {
+  const recipes = [makeRecipe({ id: 'p1' })];
+  const slots = run({ recipes, random: seeded(1) });
+  assert(slots.every((item) => item.part === 'protein'), 'protein 以外の枠がある');
   assertEqual(slots.length, 7, '枠の数');
 });
 
 test('planWeek は同じ乱数列なら同じ献立を返す', () => {
   const recipes = variedRecipes();
-  const run = () => planner.planWeek({
-    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(42),
-  });
-  assertEqual(run(), run(), '結果');
+  assertEqual(run({ recipes, random: seeded(42) }), run({ recipes, random: seeded(42) }), '結果');
 });
 
 test('planWeek は random が 1 に極めて近い値を返しても範囲外にならない', () => {
-  const slots = planner.planWeek({
-    weekStart: WEEK, recipes: variedRecipes(1), slots: [], breakfastRecipeId: null, random: () => 0.9999999999999999,
-  });
-  assert(slots.every((slot) => typeof slot.recipe_id === 'string'), 'recipe_id');
+  const slots = run({ recipes: variedRecipes(1), random: () => 0.9999999999999999 });
+  assert(slots.every((item) => typeof item.recipe_id === 'string'), 'recipe_id');
 });
 
 test('rerollSlot は今のレシピを避け、ルールを守る', () => {
   const recipes = variedRecipes();
-  const base = planner.planWeek({
-    weekStart: WEEK, recipes, slots: [], breakfastRecipeId: null, random: seeded(7),
-  });
-  const target = base.find((slot) => slot.date === '2026-10-22' && slot.meal === 'dinner');
-  for (let seed = 1; seed <= 30; seed += 1) {
-    const slot = planner.rerollSlot({
-      date: target.date, meal: target.meal, recipes, slots: base, random: seeded(seed),
-    });
-    assert(slot.recipe_id !== target.recipe_id, `seed ${seed} 今のレシピのまま`);
-    const next = base.map((candidate) => (candidate === target ? slot : candidate));
-    assertEqual(ruleViolations(next, recipes), [], `seed ${seed}`);
+  const base = run({ recipes, random: seeded(7) });
+  for (const part of schema.PARTS.dinner) {
+    const target = base.find((item) => item.date === '2026-10-22' && item.part === part);
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const next = planner.rerollSlot({
+        date: target.date, meal: target.meal, part, recipes, slots: base, random: seeded(seed),
+      });
+      assert(next.recipe_id !== target.recipe_id, `${part} seed ${seed} 今のレシピのまま`);
+      const replaced = base.map((item) => (item === target ? next : item));
+      assertEqual(ruleViolations(replaced, recipes), [], `${part} seed ${seed}`);
+    }
   }
 });
 
 test('rerollSlot は他に候補が無ければ今のレシピを返し、0 件なら null', () => {
-  const only = makeRecipe({ id: 'only', meals: ['lunch'] });
-  const current = { date: WEEK, meal: 'lunch', recipe_id: 'only', locked: false };
-  const slot = planner.rerollSlot({ date: WEEK, meal: 'lunch', recipes: [only], slots: [current], random: seeded(1) });
-  assertEqual(slot, { ...current }, '今のレシピ');
+  const only = makeRecipe({ id: 'only', kind: 'dish', meals: ['lunch'] });
+  const current = slot(WEEK, 'lunch', 'dish', 'only');
+  const next = planner.rerollSlot({
+    date: WEEK, meal: 'lunch', part: 'dish', recipes: [only], slots: [current], random: seeded(1),
+  });
+  assertEqual(next, { ...current }, '今のレシピ');
   assertEqual(
-    planner.rerollSlot({ date: WEEK, meal: 'dinner', recipes: [only], slots: [], random: seeded(1) }),
+    planner.rerollSlot({ date: WEEK, meal: 'dinner', part: 'carb', recipes: [only], slots: [], random: seeded(1) }),
     null,
     '候補なし',
   );
@@ -497,7 +573,7 @@ test('rerollSlot は他に候補が無ければ今のレシピを返し、0 件�
 
 // --- 実行 -------------------------------------------------------------
 
-async function run() {
+async function runAll() {
   const summary = document.getElementById('summary');
   const output = document.getElementById('output');
   summary.dataset.started = '1'; // tests.html の「起動できたか」の見張りに知らせる
@@ -523,7 +599,7 @@ async function run() {
   summary.className = failed === 0 ? 'pass' : 'fail';
 }
 
-run().catch((error) => {
+runAll().catch((error) => {
   const summary = document.getElementById('summary');
   summary.className = 'fail';
   summary.textContent = `テストの実行自体が失敗しました: ${error.message}`;
