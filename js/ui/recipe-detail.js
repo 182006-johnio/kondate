@@ -1,11 +1,13 @@
 // レシピ詳細。自分のレシピなら編集・削除もここから行う。
 
+import { missingSeasonings } from '../schema.js';
 import * as storage from '../storage.js';
 import { clear, el } from './dom.js';
 import { KIND_LABEL, MEAL_LABEL, METHOD_LABEL, PROTEIN_LABEL, SOURCE_LABEL } from './labels.js';
 
 export async function renderRecipe(container, ctx, id) {
   const recipe = (await ctx.recipes()).find((candidate) => candidate.id === id);
+  const { pantry } = await storage.getSettings();
 
   clear(container);
   container.append(backLink());
@@ -51,7 +53,7 @@ export async function renderRecipe(container, ctx, id) {
       linkOnly ? el('p', { class: 'muted small', text: '分量と作り方は元のページで確認してください。' }) : null,
 
       section('食材', itemList(recipe.ingredients)),
-      section('調味料', itemList(recipe.seasonings)),
+      section('調味料', itemList(recipe.seasonings, new Set(missingSeasonings(recipe, pantry)))),
       recipe.steps.length > 0
         ? section('作り方', el('ol', { class: 'steps' }, recipe.steps.map((step) => el('li', { text: step }))))
         : null,
@@ -86,9 +88,12 @@ function section(heading, body) {
   return el('section', { class: 'recipe-section' }, el('h2', { text: heading }), body);
 }
 
-function itemList(items) {
+// missing に入っている名前は「家に無い」と印を付ける（調味料一覧と照らした結果）。
+function itemList(items, missing = new Set()) {
   if (items.length === 0) return el('p', { class: 'muted', text: 'なし' });
   return el('ul', { class: 'items' }, items.map((item) => el('li', {},
-    el('span', { text: item.name }),
+    el('span', {},
+      item.name,
+      missing.has(item.name) ? el('span', { class: 'pick-warn inline', text: '家に無い' }) : null),
     item.amount ? el('span', { class: 'amount', text: item.amount }) : null)));
 }

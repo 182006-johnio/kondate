@@ -10,11 +10,14 @@
 //   3. 夕の protein パーツは、前日と翌日の夕の protein パーツと protein が重ならない
 // 候補が無ければ 3 → 2 → 1 の順に条件を外す。0 も満たせないときだけ未提案（null）にする。
 //
+// pantry（家にある調味料）を渡すと、家に無い調味料を使うレシピは 0 の段階で外す。
+// これは緩めない。作れないレシピを出すよりは未提案のほうがよい。
+//
 // 木曜は魚の日。木曜夕の protein パーツは魚（protein: fish）から選ぶ。
 // 魚のレシピが 1 件も無いときだけ、この決まりを外す。
 
 import { addDays, weekDates, weekdayOf } from './dates.js';
-import { MEALS, PARTS, fitsSlot, slotKey } from './schema.js';
+import { MEALS, PARTS, fitsSlot, missingSeasonings, slotKey } from './schema.js';
 
 // 朝食は毎日同じものを出す前提なので、重複・protein の比較に入れない。
 const COMPARED_MEALS = ['lunch', 'dinner'];
@@ -30,7 +33,7 @@ function requiredProtein(date, meal, part) {
 //
 // slots には前週の日曜を含めて渡す（月曜の夕食を前日と比べるため）。
 // 週の中の固定枠はそのまま返し、固定していない枠は作り直す。
-export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random }) {
+export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random, pantry = null }) {
   const days = weekDates(weekStart);
   const inWeek = new Set(days);
 
@@ -42,7 +45,7 @@ export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random 
     decided.set(keyOf(slot), slot);
   }
 
-  const context = { recipes, byId: indexById(recipes), days, random };
+  const context = { recipes, byId: indexById(recipes), days, random, pantry };
   const result = [];
 
   for (const date of days) {
@@ -73,7 +76,7 @@ export function planWeek({ weekStart, recipes, slots, breakfastRecipeId, random 
 // 1 枠だけ引き直す。今のレシピは避けるが、他に候補が無ければ今のレシピを返す。
 // slots には週の全枠と前週の日曜・翌週の月曜を含めて渡す。
 // 返すのは新しい枠（固定なし）。候補が 1 件も無いときは null。
-export function rerollSlot({ date, meal, part, recipes, slots, random }) {
+export function rerollSlot({ date, meal, part, recipes, slots, random, pantry = null }) {
   const key = slotKey(date, meal, part);
   const decided = new Map();
   let currentId = null;
@@ -90,6 +93,7 @@ export function rerollSlot({ date, meal, part, recipes, slots, random }) {
     byId: indexById(recipes),
     days: weekDates(date),
     random,
+    pantry,
     date,
     meal,
     part,
@@ -101,8 +105,9 @@ export function rerollSlot({ date, meal, part, recipes, slots, random }) {
 
 // --- 内部 -------------------------------------------------------------
 
-function pickRecipe({ recipes, byId, days, random, date, meal, part, decided, exclude }) {
-  let fitting = recipes.filter((recipe) => fitsSlot(recipe, meal, part));
+function pickRecipe({ recipes, byId, days, random, pantry, date, meal, part, decided, exclude }) {
+  let fitting = recipes.filter((recipe) => fitsSlot(recipe, meal, part)
+    && (pantry === null || missingSeasonings(recipe, pantry).length === 0));
   const required = requiredProtein(date, meal, part);
   if (required && fitting.some((recipe) => recipe.protein === required)) {
     fitting = fitting.filter((recipe) => recipe.protein === required);

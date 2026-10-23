@@ -1,10 +1,11 @@
-// 設定。朝食のレシピとエクスポート。
+// 設定。朝食のレシピ、家にある調味料、エクスポート。
 
 import { addDays, todayISO } from '../dates.js';
 import { exportBackup } from '../export.js';
 import { fitsSlot } from '../schema.js';
 import * as storage from '../storage.js';
 import { clear, el } from './dom.js';
+import { pantryEditor } from './pantry-editor.js';
 
 export async function renderSettings(container, ctx) {
   const [recipes, settings, counts] = await Promise.all([
@@ -50,6 +51,8 @@ export async function renderSettings(container, ctx) {
         ? breakfast
         : el('p', { class: 'notice', text: '朝食に使えるレシピがまだありません。' }),
       el('a', { class: 'button wide', href: '#/recipe-new?kind=dish&meal=breakfast', text: '＋ 朝食のレシピを追加' })),
+
+    pantryEditor(ctx, settings.pantry),
 
     el('section', { class: 'card' },
       el('h2', { text: 'バックアップ' }),

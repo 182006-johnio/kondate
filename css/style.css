@@ -610,6 +610,55 @@ a {
   margin: 0;
 }
 
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding-left: 12px;
+  border-radius: 999px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.tag-remove {
+  min-width: 36px;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.inline-form {
+  display: flex;
+  gap: 8px;
+}
+
+.inline-form .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.pick-warn {
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
+.pick-warn.inline {
+  margin-left: 6px;
+}
+
 /* --- フォーム ----------------------------------------------------------- */
 
 .form {

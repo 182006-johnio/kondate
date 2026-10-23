@@ -34,6 +34,7 @@ export async function renderWeek(container, ctx, requested) {
       slots: nearby,
       breakfastRecipeId: settings.breakfast_recipe_id,
       random: Math.random,
+      pantry: settings.pantry,
     });
     await storage.putSlots(planned);
     ctx.toast(hasUnlocked ? '固定以外を作り直しました' : '献立を作りました');

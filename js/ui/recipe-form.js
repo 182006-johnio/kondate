@@ -1,7 +1,6 @@
 // 自分のレシピの追加・編集。
-// 食材・調味料・手順は行を足し引きできる。調味料は家にある一覧（data/pantry.js）を候補に出す。
+// 食材・調味料・手順は行を足し引きできる。調味料は家にある一覧（設定の調味料）を候補に出す。
 
-import { PANTRY } from '../../data/pantry.js';
 import { KINDS, METHODS, PROTEINS } from '../schema.js';
 import * as storage from '../storage.js';
 import { clear, el } from './dom.js';
@@ -11,6 +10,7 @@ const DISH_MEALS = ['breakfast', 'lunch'];
 
 // id があれば編集、無ければ新規。query は新規のときの初期値（kind=dish&meal=breakfast など）。
 export async function renderRecipeForm(container, ctx, { id = null, query = '' } = {}) {
+  const { pantry } = await storage.getSettings();
   let recipe;
   if (id) {
     recipe = await storage.getMyRecipe(id);
@@ -111,7 +111,7 @@ export async function renderRecipeForm(container, ctx, { id = null, query = '' }
       field('メモ', note),
       errorBox,
       el('button', { class: 'button primary wide', type: 'submit', text: id ? '保存する' : '追加する' })),
-    el('datalist', { id: 'pantry' }, PANTRY.map((item) => el('option', { value: item }))),
+    el('datalist', { id: 'pantry' }, pantry.map((item) => el('option', { value: item }))),
   );
 }
 

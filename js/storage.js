@@ -14,6 +14,8 @@ import {
   createDB,
   createRecipe,
   createSlot,
+  migrateDB,
+  normalizeNames,
   normalizeRecipe,
   slotKey,
   validateDB,
@@ -26,7 +28,7 @@ const DEFAULT_STORAGE_KEY = 'kondate.v1';
 const PATCHABLE_RECIPE_FIELDS = [
   'name', 'kind', 'meals', 'url', 'protein', 'method', 'ingredients', 'seasonings', 'steps', 'minutes', 'note',
 ];
-const PATCHABLE_SETTINGS_FIELDS = ['breakfast_recipe_id'];
+const PATCHABLE_SETTINGS_FIELDS = ['breakfast_recipe_id', 'pantry', 'goals'];
 
 let storageKey = DEFAULT_STORAGE_KEY;
 let db = null; // メモリ上の唯一の正。commit() 以外から書き換えない。
@@ -62,11 +64,18 @@ export async function init({ key = DEFAULT_STORAGE_KEY } = {}) {
     );
   }
 
-  if (Number.isInteger(parsed?.schemaVersion) && parsed.schemaVersion > SCHEMA_VERSION) {
+  const version = Number.isInteger(parsed?.schemaVersion) ? parsed.schemaVersion : 1;
+  if (version > SCHEMA_VERSION) {
     throw new StorageError(
-      `保存データが新しい形式です（version ${parsed.schemaVersion}）。`
+      `保存データが新しい形式です（version ${version}）。`
       + 'このまま読み書きすると壊すので中断します。アプリを最新にしてください。',
     );
+  }
+
+  const needsMigration = version < SCHEMA_VERSION;
+  if (needsMigration) {
+    backupOnce(raw, version);
+    parsed = migrateDB(parsed);
   }
 
   const { ok, errors } = validateDB(parsed);
@@ -75,7 +84,21 @@ export async function init({ key = DEFAULT_STORAGE_KEY } = {}) {
       `保存データの検証に失敗しました。上書きを避けるためここで中断します。\n${describe(errors)}`,
     );
   }
+
+  // 書き込むのは検証を通ったあとだけ。
+  if (needsMigration) writeRaw(JSON.stringify(parsed));
   db = parsed;
+}
+
+// 移行前のデータをそのまま別キーへ退避する。二度目以降は上書きしない。
+// 退避を上書きすると、移行後に壊れていたときの戻り先が消える。
+function backupOnce(raw, version) {
+  const key = `${storageKey}.backup.v${version}`;
+  try {
+    if (localStorage.getItem(key) === null) localStorage.setItem(key, raw);
+  } catch (cause) {
+    throw new StorageError('移行前のデータを退避できませんでした。移行を中断します。', { cause });
+  }
 }
 
 // --- 自分のレシピ -------------------------------------------------------
@@ -206,6 +229,7 @@ export async function updateSettings(patch) {
   }
 
   const settings = { ...state.settings, ...patch };
+  if ('pantry' in patch) settings.pantry = normalizeNames(patch.pantry);
   assertValid(validateSettings(settings), '設定');
   if (settings.breakfast_recipe_id !== null) assertKnownRecipe(state, settings.breakfast_recipe_id);
   commit({ ...state, settings });

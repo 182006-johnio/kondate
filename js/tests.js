@@ -42,7 +42,19 @@ async function assertThrows(fn, message) {
 
 async function freshStore() {
   localStorage.removeItem(TEST_KEY);
+  // 退避キーも消す。残っていると次のテストが前のテストの後始末に左右される。
+  localStorage.removeItem(`${TEST_KEY}.backup.v1`);
   await storage.init({ key: TEST_KEY });
+}
+
+// v1（schemaVersion 1）のときの保存データ。
+function v1Data() {
+  return {
+    schemaVersion: 1,
+    recipes: [{ ...schema.normalizeRecipe({ ...BREAKFAST, id: '11111111-1111-4111-8111-111111111111' }) }],
+    slots: [slot('2026-10-19', 'breakfast', 'dish', '11111111-1111-4111-8111-111111111111', true)],
+    settings: { breakfast_recipe_id: '11111111-1111-4111-8111-111111111111' },
+  };
 }
 
 // 既定は夕食の protein パーツ（サラダに載せるたんぱく質）。
@@ -218,6 +230,45 @@ test('init は新しい版のデータを読まない', async () => {
   await assertThrows(() => storage.init({ key: TEST_KEY }), '新しい版');
 });
 
+test('init は v1 のデータを v2 に移行し、元のデータを一度だけ退避する', async () => {
+  await freshStore();
+  const raw = JSON.stringify(v1Data());
+  localStorage.setItem(TEST_KEY, raw);
+  await storage.init({ key: TEST_KEY });
+
+  const db = await storage.snapshot();
+  assertEqual(db.schemaVersion, 2, 'schemaVersion');
+  assertEqual(db.recipes, v1Data().recipes, 'レシピはそのまま');
+  assertEqual(db.slots, v1Data().slots, '枠はそのまま');
+  assertEqual(db.settings.breakfast_recipe_id, v1Data().settings.breakfast_recipe_id, '朝食の設定はそのまま');
+  assert(db.settings.pantry.includes('はちみつ'), '調味料一覧にはちみつがある');
+  assertEqual([db.settings.goals, db.inventory, db.shopping_checked, db.details], [null, [], {}, {}], '新しい項目');
+  assertEqual(localStorage.getItem(`${TEST_KEY}.backup.v1`), raw, '生のまま退避される');
+  assertEqual(JSON.parse(localStorage.getItem(TEST_KEY)).schemaVersion, 2, '移行後の形で書き戻される');
+
+  // 退避が残っている状態でもう一度 v1 を移行しても、最初の退避は上書きしない。
+  const other = { ...v1Data(), slots: [] };
+  localStorage.setItem(TEST_KEY, JSON.stringify(other));
+  await storage.init({ key: TEST_KEY });
+  assertEqual(localStorage.getItem(`${TEST_KEY}.backup.v1`), raw, '最初の退避が残る');
+});
+
+test('init は schemaVersion の無いデータを v1 とみなして移行する', async () => {
+  await freshStore();
+  const { schemaVersion, ...noVersion } = v1Data();
+  localStorage.setItem(TEST_KEY, JSON.stringify(noVersion));
+  await storage.init({ key: TEST_KEY });
+  assertEqual((await storage.snapshot()).schemaVersion, 2, 'schemaVersion');
+});
+
+test('init は移行しても検証に通らないデータを書き戻さない', async () => {
+  await freshStore();
+  const broken = JSON.stringify({ ...v1Data(), slots: [slot('2026-10-19', 'lunch', 'carb', 'x')] });
+  localStorage.setItem(TEST_KEY, broken);
+  await assertThrows(() => storage.init({ key: TEST_KEY }), '壊れた v1');
+  assertEqual(localStorage.getItem(TEST_KEY), broken, '元のまま残る');
+});
+
 test('addRecipe は UUID と source=mine を付けて保存し、再読み込みしても残る', async () => {
   await freshStore();
   const added = await storage.addRecipe({ ...BREAKFAST, source: 'dlab', id: 'dlab-999' });
@@ -324,6 +375,29 @@ test('updateSettings は朝食のレシピを設定できる', async () => {
     () => storage.updateSettings({ breakfast_recipe_id: crypto.randomUUID() }),
     '存在しないレシピ',
   );
+});
+
+test('updateSettings は調味料一覧の表記をそろえ、空と重複を落とす', async () => {
+  await freshStore();
+  const settings = await storage.updateSettings({ pantry: [' 醤油 ', 'ｵｲｽﾀｰｿｰｽ', '醤油', '', '　'] });
+  assertEqual(settings.pantry, ['醤油', 'オイスターソース'], '一覧');
+  await assertThrows(() => storage.updateSettings({ pantry: ['あ'.repeat(21)] }), '21 文字');
+  await assertThrows(() => storage.updateSettings({ pantry: '醤油' }), '配列でない');
+});
+
+test('updateSettings は目標を保存でき、不正な値を弾く', async () => {
+  await freshStore();
+  const goals = { kcal: 2000, protein: 120, fat: null, carb: 250, fiber: 21, salt: 7.5 };
+  assertEqual((await storage.updateSettings({ goals })).goals, goals, '目標');
+  await assertThrows(() => storage.updateSettings({ goals: { ...goals, kcal: -1 } }), '負の数');
+  await assertThrows(() => storage.updateSettings({ goals: { ...goals, sugar: 10 } }), '不明な項目');
+  assertEqual((await storage.updateSettings({ goals: null })).goals, null, '未設定に戻せる');
+});
+
+test('missingSeasonings は家に無い調味料を返す（表記はそろえて比べる）', () => {
+  const recipe = makeRecipe({ seasonings: [{ name: '醤油', amount: '' }, { name: 'ﾅﾝﾌﾟﾗｰ', amount: '' }, { name: 'はちみつ', amount: '' }] });
+  assertEqual(schema.missingSeasonings(recipe, ['醤油', 'はちみつ']), ['ﾅﾝﾌﾟﾗｰ'], '無いもの');
+  assertEqual(schema.missingSeasonings(recipe, ['醤油', 'ナンプラー', 'はちみつ']), [], '全部ある');
 });
 
 test('deleteRecipe はそのレシピの枠と朝食設定も消す', async () => {
@@ -545,6 +619,35 @@ test('planWeek は random が 1 に極めて近い値を返しても範囲外に
   assert(slots.every((item) => typeof item.recipe_id === 'string'), 'recipe_id');
 });
 
+test('planWeek は家に無い調味料を使うレシピを提案しない（緩めない）', () => {
+  const recipes = [
+    makeRecipe({ id: 'ok', seasonings: [{ name: '塩', amount: '' }] }),
+    makeRecipe({ id: 'ng', seasonings: [{ name: 'ナンプラー', amount: '' }] }),
+  ];
+  for (let seed = 1; seed <= 10; seed += 1) {
+    const slots = run({ recipes, random: seeded(seed), pantry: ['塩'] });
+    assert(slots.every((item) => item.recipe_id === 'ok'), `seed ${seed} 家に無い調味料のレシピを出した`);
+  }
+  const none = run({ recipes: [recipes[1]], random: seeded(1), pantry: ['塩'] });
+  assertEqual(none.length, 0, '作れるレシピが無ければ未提案');
+  assertEqual(run({ recipes: [recipes[1]], random: seeded(1) }).length, 7, 'pantry を渡さなければ絞らない');
+});
+
+test('rerollSlot も家に無い調味料を使うレシピを避ける', () => {
+  const recipes = [
+    makeRecipe({ id: 'a' }),
+    makeRecipe({ id: 'b' }),
+    makeRecipe({ id: 'ng', seasonings: [{ name: 'ナンプラー', amount: '' }] }),
+  ];
+  const current = slot('2026-10-20', 'dinner', 'protein', 'a');
+  for (let seed = 1; seed <= 10; seed += 1) {
+    const next = planner.rerollSlot({
+      date: current.date, meal: 'dinner', part: 'protein', recipes, slots: [current], random: seeded(seed), pantry: ['塩'],
+    });
+    assertEqual(next.recipe_id, 'b', `seed ${seed}`);
+  }
+});
+
 const THURSDAY = '2026-10-22';
 
 test('weekdayOf は曜日を返す', () => {
@@ -733,7 +836,11 @@ test('serializeBackup は storage.snapshot() の形をそのまま書き出す',
   const added = await storage.addRecipe(BREAKFAST);
   await storage.updateSettings({ breakfast_recipe_id: added.id });
   const parsed = JSON.parse(backup.serializeBackup(await storage.snapshot()));
-  assertEqual(Object.keys(parsed), ['schemaVersion', 'recipes', 'slots', 'settings'], 'キー');
+  assertEqual(
+    Object.keys(parsed),
+    ['schemaVersion', 'recipes', 'slots', 'settings', 'inventory', 'shopping_checked', 'details'],
+    'キー',
+  );
   assertEqual(schema.validateDB(parsed).errors, [], '検証エラー');
 });
 
@@ -821,6 +928,7 @@ async function runAll() {
   }
 
   localStorage.removeItem(TEST_KEY);
+  localStorage.removeItem(`${TEST_KEY}.backup.v1`);
   summary.textContent = `${tests.length} 件中 ${tests.length - failed} 件成功 / ${failed} 件失敗`;
   summary.className = failed === 0 ? 'pass' : 'fail';
 }

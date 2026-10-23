@@ -6,9 +6,16 @@
 // 検証関数は例外を投げず { ok, errors } を返す。どこがどう不正かを列挙して見せるため。
 // 同梱レシピ集（data/recipes.js）もこの validateRecipe で検証する。
 
+import { PANTRY } from '../data/pantry.js';
 import { isValidISO } from './dates.js';
 
-export const SCHEMA_VERSION = 1;
+// v1 → v2（2026-10-23）: settings に pantry と goals、inventory・shopping_checked・details を追加。
+export const SCHEMA_VERSION = 2;
+
+// 1 日の目標。どれも未設定（null）にできる。
+export const GOAL_FIELDS = ['kcal', 'protein', 'fat', 'carb', 'fiber', 'salt'];
+
+const PANTRY_ITEM_MAX = 20;
 
 export const MEALS = ['breakfast', 'lunch', 'dinner'];
 export const KINDS = ['dish', 'dressing', 'protein', 'rice_side', 'noodle'];
@@ -41,11 +48,58 @@ export function createDB() {
     recipes: [],
     slots: [],
     settings: createSettings(),
+    inventory: [],
+    shopping_checked: {},
+    details: {},
   };
 }
 
 export function createSettings() {
-  return { breakfast_recipe_id: null };
+  return { breakfast_recipe_id: null, pantry: [...PANTRY], goals: null };
+}
+
+// v1 のデータを v2 の形にする。元のオブジェクトは書き換えない。
+// 調味料一覧は初期値（はちみつを含む）で始める。v1 には一覧を持つ場所が無かったため。
+export function migrateDB(v1) {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    recipes: v1.recipes,
+    slots: v1.slots,
+    settings: { ...createSettings(), ...v1.settings },
+    inventory: [],
+    shopping_checked: {},
+    details: {},
+  };
+}
+
+// 調味料・食材の名前をそろえる。NFKC を先に、trim を後にかける
+// （順序が逆だと全角スペースだけの前後余白が落ちない）。
+export function normalizeName(value) {
+  return typeof value === 'string' ? value.normalize('NFKC').trim() : value;
+}
+
+// 空と重複を落とした名前の一覧。文字列でない値は残して検証側に判断を渡す。
+export function normalizeNames(values) {
+  if (!Array.isArray(values)) return values;
+  const seen = new Set();
+  const names = [];
+  for (const value of values) {
+    const name = normalizeName(value);
+    if (typeof name !== 'string') {
+      names.push(name);
+      continue;
+    }
+    if (name === '' || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+// そのレシピの調味料がすべて家にあるか。表記は normalizeName でそろえて比べる。
+export function missingSeasonings(recipe, pantry) {
+  const have = new Set(pantry.map(normalizeName));
+  return recipe.seasonings.map((item) => item.name).filter((name) => !have.has(normalizeName(name)));
 }
 
 // 自分のレシピを作る。省略した項目は空で埋める。
@@ -169,11 +223,49 @@ export function validateSlot(slot) {
 
 export function validateSettings(settings) {
   if (!isPlainObject(settings)) return result(['settings がオブジェクトではありません']);
+  const errors = [];
+
   const id = settings.breakfast_recipe_id;
   if (id !== null && !isNonEmptyString(id)) {
-    return result(['settings.breakfast_recipe_id は空でない文字列か null にしてください']);
+    errors.push('settings.breakfast_recipe_id は空でない文字列か null にしてください');
   }
-  return result([]);
+
+  errors.push(...validateNames(settings.pantry, '調味料', PANTRY_ITEM_MAX));
+
+  const { goals } = settings;
+  if (goals !== null) {
+    if (!isPlainObject(goals)) {
+      errors.push('settings.goals はオブジェクトか null にしてください');
+    } else {
+      const unknown = Object.keys(goals).filter((key) => !GOAL_FIELDS.includes(key));
+      if (unknown.length > 0) errors.push(`目標に不明な項目があります: ${unknown.join(', ')}`);
+      for (const key of GOAL_FIELDS) {
+        const value = goals[key];
+        if (value !== null && !(typeof value === 'number' && Number.isFinite(value) && value >= 0)) {
+          errors.push(`目標の ${key} は 0 以上の数か null にしてください`);
+        }
+      }
+    }
+  }
+  return result(errors);
+}
+
+// 名前の一覧（調味料・余り食材）。空でなく、前後に空白が無く、重複しない文字列。
+export function validateNames(values, label, max = PANTRY_ITEM_MAX) {
+  if (!Array.isArray(values)) return [`${label}の一覧が配列ではありません`];
+  const errors = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (!isNonEmptyString(value) || value !== normalizeName(value)) {
+      errors.push(`${label}「${String(value)}」の表記が不正です`);
+    } else if (value.length > max) {
+      errors.push(`${label}「${value}」が ${max} 文字を超えています`);
+    } else if (seen.has(value)) {
+      errors.push(`${label}「${value}」が重複しています`);
+    }
+    seen.add(value);
+  }
+  return errors;
 }
 
 // recipes / slots の一意制約と、自分のレシピへの参照もここで確かめる。
@@ -187,6 +279,17 @@ export function validateDB(db) {
   if (!Array.isArray(db.recipes)) errors.push('recipes が配列ではありません');
   if (!Array.isArray(db.slots)) errors.push('slots が配列ではありません');
   errors.push(...validateSettings(db.settings).errors);
+  errors.push(...validateNames(db.inventory, '余り食材', NAME_MAX));
+  if (!isPlainObject(db.shopping_checked)) {
+    errors.push('shopping_checked がオブジェクトではありません');
+  } else {
+    for (const [week, names] of Object.entries(db.shopping_checked)) {
+      if (!isValidISO(week)) errors.push(`買い物リストの週 ${week} が日付ではありません`);
+      errors.push(...validateNames(names, `買い物リスト ${week} の項目`, NAME_MAX));
+    }
+  }
+  // 分量データの中身は段階 3 で検証する。ここでは入れ物の形だけを見る。
+  if (!isPlainObject(db.details)) errors.push('details がオブジェクトではありません');
   if (errors.length > 0) return result(errors);
 
   const recipeIds = new Set();
