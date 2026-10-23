@@ -50,7 +50,7 @@ const ROUTES = [
   [/^#\/recipe\/(.+)$/, (match) => renderRecipe(view, ctx, decodeURIComponent(match[1])), 'recipes'],
   [/^#\/recipe-new(?:\?(.*))?$/, (match) => renderRecipeForm(view, ctx, { query: match[1] ?? '' }), 'recipes'],
   [/^#\/recipe-edit\/(.+)$/, (match) => renderRecipeForm(view, ctx, { id: decodeURIComponent(match[1]) }), 'recipes'],
-  [/^#\/shopping$/, () => renderShopping(view, ctx), 'shopping'],
+  [/^#\/shopping(?:\/(\d{4}-\d{2}-\d{2}))?$/, (match) => renderShopping(view, ctx, match[1]), 'shopping'],
   [/^#\/settings$/, () => renderSettings(view, ctx), 'settings'],
 ];
 

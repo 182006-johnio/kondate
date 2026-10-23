@@ -25,6 +25,7 @@ import {
   validateSettings,
   validateSlot,
 } from './schema.js';
+import { isValidISO } from './dates.js';
 
 const DEFAULT_STORAGE_KEY = 'kondate.v1';
 const PATCHABLE_RECIPE_FIELDS = [
@@ -264,6 +265,29 @@ export async function removeInventory(name) {
   if (inventory.length === state.inventory.length) return false;
   commit({ ...state, inventory });
   return true;
+}
+
+// --- 買い物リストのチェック ----------------------------------------------
+
+// その週（月曜の日付）に「買った」にした項目の名前。
+export async function getShoppingChecked(week) {
+  return clone(requireInit().shopping_checked[week] ?? []);
+}
+
+export async function setShoppingChecked(week, name, checked) {
+  const state = requireInit();
+  if (!isValidISO(week)) throw new StorageError(`週の日付が不正です: ${String(week)}`);
+  const current = state.shopping_checked[week] ?? [];
+  const next = checked
+    ? (current.includes(name) ? current : [...current, name])
+    : current.filter((item) => item !== name);
+  const shopping_checked = { ...state.shopping_checked };
+  if (next.length > 0) shopping_checked[week] = next;
+  else delete shopping_checked[week];
+  const errors = validateNames(next, '買い物リストの項目', 80);
+  if (errors.length > 0) throw new StorageError(errors.join('\n'));
+  commit({ ...state, shopping_checked });
+  return clone(next);
 }
 
 // --- 分量データ ---------------------------------------------------------

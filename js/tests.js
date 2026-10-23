@@ -10,6 +10,7 @@ import * as dates from './dates.js';
 import * as backup from './export.js';
 import * as nutrition from './nutrition.js';
 import * as planner from './planner.js';
+import * as shopping from './shopping-list.js';
 import * as schema from './schema.js';
 import * as storage from './storage.js';
 
@@ -998,6 +999,90 @@ test('自分のレシピに 1 人分の栄養を保存でき、空欄だけな�
   const cleared = await storage.updateRecipe(added.id, { nutrition: { kcal: '' } });
   assertEqual(cleared.nutrition, null, '全部空なら null');
   await assertThrows(() => storage.updateRecipe(added.id, { nutrition: { kcal: -1 } }), '負の数');
+});
+
+// --- shopping（買い物リスト） ---------------------------------------------
+
+function shoppingFixture() {
+  const chicken = makeRecipe({
+    id: 's-chicken', name: '鶏むねの低温調理', source: 'dlab',
+    ingredients: [{ name: '鶏むね肉', amount: '' }],
+    seasonings: [{ name: '塩', amount: '' }],
+  });
+  const soup = makeRecipe({
+    id: 's-soup', name: '鶏スープ', kind: 'rice_side', source: 'dlab',
+    ingredients: [{ name: '鶏むね肉', amount: '' }, { name: '玉ねぎ', amount: '' }],
+    seasonings: [{ name: 'ナンプラー', amount: '' }],
+  });
+  const udon = makeRecipe({
+    id: 's-udon', name: '肉うどん', kind: 'noodle', source: 'external',
+    ingredients: [{ name: '牛肉', amount: '' }],
+  });
+  const mine = makeRecipe({
+    id: 'mine-x', name: '自分の朝食', kind: 'dish', meals: ['breakfast'], source: 'mine',
+    ingredients: [{ name: '卵', amount: '2個' }],
+  });
+  const details = {
+    's-chicken': { servings: 2, ingredients: [{ name: '鶏むね肉', grams: 400, food: 'chicken_breast_skin' }, { name: '塩', grams: 4, food: 'salt' }], published: null },
+    's-soup': { servings: 4, ingredients: [{ name: '鶏むね肉', grams: 400, food: 'chicken_breast_skin' }, { name: '玉ねぎ', grams: 200, food: 'onion' }], published: null },
+    's-udon': { servings: 1, base_carb: 'udon', ingredients: [{ name: '牛肉', grams: 100, food: 'beef_shoulder' }], published: null },
+  };
+  const recipes = [chicken, soup, udon, mine];
+  return { byId: new Map(recipes.map((recipe) => [recipe.id, recipe])), details };
+}
+
+test('shoppingList は分量データの 1 人分を回数分足し、調味料を入れない', () => {
+  const { byId, details } = shoppingFixture();
+  const days = dates.weekDates(WEEK);
+  const slots = [
+    slot(days[0], 'dinner', 'protein', 's-chicken'),
+    slot(days[1], 'dinner', 'protein', 's-chicken'),
+    slot(days[2], 'dinner', 'carb', 's-soup'),
+    slot(days[0], 'breakfast', 'dish', 'mine-x'),
+  ];
+  const list = shopping.shoppingList({ days, slots, byId, details, inventory: [], pantry: ['塩'] });
+  const find = (name) => list.items.find((item) => item.name === name);
+  assertEqual([find('鶏むね肉').grams, find('鶏むね肉').count], [500, 3], '鶏むね肉（200g × 2 + 100g）');
+  assertEqual(find('玉ねぎ').grams, 50, '玉ねぎ');
+  assertEqual([find('卵').grams, find('卵').count], [null, 1], '自分のレシピは回数だけ');
+  assert(!find('塩'), '調味料を入れない');
+  assertEqual(list.missingSeasonings.map((item) => item.name), ['ナンプラー'], '家に無い調味料');
+  assertEqual(shopping.formatAmount(find('鶏むね肉')), '約 500g（3回）', '表記');
+});
+
+test('shoppingList は夕食の前提を日数分足し、麺の日は麺で数える', () => {
+  const { byId, details } = shoppingFixture();
+  const days = dates.weekDates(WEEK);
+  const slots = [slot(days[3], 'dinner', 'carb', 's-udon')];
+  const list = shopping.shoppingList({ days, slots, byId, details, inventory: [], pantry: [] });
+  assertEqual(list.base.map((item) => [item.name, item.text]), [
+    ['キャベツ', '3.5玉（夕食のサラダ 7日分）'],
+    ['米', `約 ${(270 * 6 / 330).toFixed(1)}合（ご飯 1,620g）`],
+    ['ゆでうどん', '270g'],
+  ], '前提');
+});
+
+test('shoppingList は余り食材に当たる食材を別に出す', () => {
+  const { byId, details } = shoppingFixture();
+  const days = dates.weekDates(WEEK);
+  const slots = [slot(days[0], 'dinner', 'carb', 's-soup')];
+  const list = shopping.shoppingList({ days, slots, byId, details, inventory: ['玉ねぎ', 'キャベツ'], pantry: [] });
+  assertEqual(list.items.map((item) => item.name), ['鶏むね肉'], '買うもの');
+  assertEqual(list.leftovers.map((item) => item.name), ['玉ねぎ'], '余りで足りるもの');
+  assert(list.base.find((item) => item.name === 'キャベツ').leftover, 'キャベツも余りで足りる');
+});
+
+test('setShoppingChecked は週ごとにチェックを保存し、外すと消える', async () => {
+  await freshStore();
+  await storage.setShoppingChecked(WEEK, '鶏むね肉', true);
+  await storage.setShoppingChecked(WEEK, '鶏むね肉', true);
+  await storage.setShoppingChecked(WEEK, '玉ねぎ', true);
+  assertEqual(await storage.getShoppingChecked(WEEK), ['鶏むね肉', '玉ねぎ'], 'チェック');
+  assertEqual(await storage.getShoppingChecked('2026-10-26'), [], '別の週');
+  await storage.setShoppingChecked(WEEK, '鶏むね肉', false);
+  await storage.setShoppingChecked(WEEK, '玉ねぎ', false);
+  assertEqual((await storage.snapshot()).shopping_checked, {}, '空になった週は消える');
+  await assertThrows(() => storage.setShoppingChecked('2026-13-01', 'x', true), '不正な週');
 });
 
 // --- export（エクスポート） --------------------------------------------
