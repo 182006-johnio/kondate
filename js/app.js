@@ -88,6 +88,8 @@ function showError(error) {
 }
 
 async function start() {
+  // index.html の起動の見張りに、モジュールが動き始めたことを知らせる。
+  document.documentElement.dataset.started = '1';
   try {
     await storage.init();
   } catch (error) {
@@ -98,4 +100,12 @@ async function start() {
   await render();
 }
 
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('sw.js').catch((error) => {
+    console.warn('Service Worker を登録できませんでした:', error);
+  });
+}
+
 start();
+registerServiceWorker();

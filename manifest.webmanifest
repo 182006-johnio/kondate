@@ -1,0 +1,17 @@
+{
+  "id": "./",
+  "name": "献立",
+  "short_name": "献立",
+  "description": "1週間の献立を提案し、自分で変更できる。データは端末の中だけに保存する。",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F4F1EA",
+  "theme_color": "#F4F1EA",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

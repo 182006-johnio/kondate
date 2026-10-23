@@ -4,11 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F4F1EA" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15140F" media="(prefers-color-scheme: dark)">
 <title>献立</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<!-- iOS はホーム画面のアイコンに manifest ではなくこれを使う -->
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<!-- apple- 付きのほうは古い綴り。iOS がまだこちらしか見ないので両方置く。 -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="献立">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<main id="view" aria-live="polite"></main>
+<main id="view" aria-live="polite">
+  <p id="boot-status" class="muted">読み込み中…</p>
+</main>
 
 <nav class="tabbar" aria-label="画面の切り替え">
   <a class="tab" href="#/week" data-tab="week">献立</a>
@@ -19,6 +31,41 @@
 <dialog id="sheet" class="sheet"></dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 
+<script>
+  // app.js が一度も動かなかった場合に「読み込み中…」のまま黙って止まらないようにする。
+  // iPhone にはコンソールが無いので、何が起きたかを画面に出す。
+  (function () {
+    var problems = [];
+
+    function note(message) {
+      if (message && problems.indexOf(message) === -1) problems.push(message);
+    }
+
+    // 読み込めなかったファイルと、実行時のエラーの両方を拾う。
+    window.addEventListener('error', function (event) {
+      if (event.target && event.target.src) note('読み込めません: ' + event.target.src);
+      else note(event.message);
+    }, true);
+
+    window.addEventListener('unhandledrejection', function (event) {
+      var reason = event.reason;
+      note(reason && reason.message ? reason.message : String(reason));
+    });
+
+    setTimeout(function () {
+      if (document.documentElement.dataset.started === '1') return;
+      var boot = document.getElementById('boot-status');
+      if (!boot) return;
+      boot.className = 'error pre';
+      boot.textContent = (location.protocol === 'file:'
+        ? 'file:// では ES Modules を読み込めません。HTTP 経由で開いてください。'
+        : 'アプリを起動できませんでした。')
+        + (problems.length ? '\n\n' + problems.join('\n') : '')
+        + '\n\n電波の良い場所でアプリを完全に終了し、開き直すと直ることがあります。'
+        + 'サイトデータの削除はしないでください（自分のレシピと献立が消えます）。';
+    }, 3000);
+  })();
+</script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
