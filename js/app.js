@@ -1,0 +1,85 @@
+// 起動と画面の切り替え。
+//
+// 画面は URL の # で決める（#/week/2026-10-19、#/recipe/dlab-001 など）。
+// iPhone のスワイプで戻る操作やブラウザの戻るボタンがそのまま効くようにするため。
+
+import { RECIPES } from '../data/recipes.js';
+import * as storage from './storage.js';
+import { clear, el } from './ui/dom.js';
+import { renderWeek } from './ui/week.js';
+
+const view = document.getElementById('view');
+const toastNode = document.getElementById('toast');
+let toastTimer = 0;
+
+// 画面に渡す道具。画面どうしはこれを介してだけやりとりする。
+const ctx = {
+  // 同梱レシピ集と自分のレシピを合わせた全レシピ。
+  async recipes() {
+    return [...RECIPES, ...(await storage.getMyRecipes())];
+  },
+  navigate(hash) {
+    if (location.hash === hash) render();
+    else location.hash = hash;
+  },
+  refresh() {
+    return render();
+  },
+  toast(message) {
+    toastNode.textContent = message;
+    toastNode.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastNode.hidden = true; }, 2500);
+  },
+  sheet: document.getElementById('sheet'),
+};
+
+// [正規表現, 描画関数, タブ名]。上から順に最初に合ったものを使う。
+const ROUTES = [
+  [/^#\/week(?:\/(\d{4}-\d{2}-\d{2}))?$/, (match) => renderWeek(view, ctx, match[1]), 'week'],
+];
+
+async function render() {
+  const hash = location.hash || '#/week';
+  for (const [pattern, draw, tab] of ROUTES) {
+    const match = hash.match(pattern);
+    if (!match) continue;
+    markTab(tab);
+    try {
+      await draw(match);
+    } catch (error) {
+      showError(error);
+    }
+    return;
+  }
+  location.replace('#/week');
+}
+
+function markTab(tab) {
+  for (const link of document.querySelectorAll('.tab')) {
+    link.classList.toggle('active', link.dataset.tab === tab);
+    if (link.dataset.tab === tab) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
+}
+
+function showError(error) {
+  console.error(error);
+  clear(view);
+  view.append(el('section', { class: 'error' },
+    el('h1', { text: 'うまく表示できませんでした' }),
+    el('p', { class: 'pre', text: error?.message ?? String(error) })));
+}
+
+async function start() {
+  try {
+    await storage.init();
+  } catch (error) {
+    showError(error);
+    return;
+  }
+  window.addEventListener('hashchange', render);
+  await render();
+}
+
+start();

@@ -1,0 +1,355 @@
+/* 献立アプリの見た目。システムフォントのみ。ライトを既定にし、ダークは prefers-color-scheme で上書きする。 */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #F4F1EA;
+  --card: #FFFFFF;
+  --field: #F8F6F1;
+  --border: #E3DDD0;
+  --ink: #23201A;
+  --muted: #6B6456;
+  --accent: #2F7D4F;
+  --accent-soft: #E3F1E8;
+  --on-accent: #FFFFFF;
+  --fish: #1F6FB2;
+  --fish-soft: #E2EEF8;
+  --danger: #B42318;
+  --pressed: #EFEADF;
+  --scrim: rgba(35, 32, 26, 0.45);
+
+  --radius: 14px;
+  --tap: 44px;
+  --tabbar-height: 56px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15140F;
+    --card: #211F19;
+    --field: #1A1914;
+    --border: #36322A;
+    --ink: #EEEAE0;
+    --muted: #A8A090;
+    --accent: #6CC48F;
+    --accent-soft: #1F3527;
+    --on-accent: #10200F;
+    --fish: #7DB7EA;
+    --fish-soft: #1A2A3A;
+    --danger: #F87171;
+    --pressed: #2A2720;
+    --scrim: rgba(0, 0, 0, 0.6);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-tap-highlight-color: transparent;
+}
+
+main {
+  max-width: 560px;
+  margin: 0 auto;
+  /* ノッチとホームインジケータ、下のタブバーを避ける。 */
+  padding: calc(12px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+    calc(var(--tabbar-height) + 24px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+}
+
+h1 {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* --- 共通部品 ----------------------------------------------------------- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--tap);
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:active {
+  background: var(--pressed);
+}
+
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.button.danger {
+  color: var(--danger);
+}
+
+.button.wide {
+  width: 100%;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  border-radius: 50%;
+  color: var(--ink);
+  font-size: 1.8rem;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.icon-button:active {
+  background: var(--pressed);
+}
+
+.chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.chip.strong {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.chip.fish {
+  background: var(--fish-soft);
+  border-color: transparent;
+  color: var(--fish);
+}
+
+.link {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.notice {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  font-size: 0.9rem;
+}
+
+.notice a {
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.pre {
+  white-space: pre-wrap;
+}
+
+.error {
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--danger);
+}
+
+/* --- タブバー ----------------------------------------------------------- */
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  z-index: 10;
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tabbar-height);
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tab.active {
+  color: var(--accent);
+}
+
+/* --- 献立画面 ----------------------------------------------------------- */
+
+.week-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.week-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.week-header + .button,
+.notice + .button {
+  margin-bottom: 16px;
+}
+
+.days {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.day {
+  padding: 12px 12px 6px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+
+.day.today {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.day-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.slots {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.slots .base {
+  padding: 8px 0 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slot:active {
+  background: var(--pressed);
+}
+
+.slot-label {
+  flex: 0 0 auto;
+  min-width: 2em;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.slot-label.sub {
+  min-width: 6.5em;
+  padding-left: 1em;
+  font-weight: 600;
+}
+
+.slot-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.slot.empty .slot-name {
+  color: var(--muted);
+}
+
+.lock {
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+}
+
+/* --- トースト ----------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--tabbar-height) + 16px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 0.9rem;
+  z-index: 30;
+}
